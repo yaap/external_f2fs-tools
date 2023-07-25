@@ -225,18 +225,22 @@ int f2fs_add_link(struct f2fs_sb_info *sbi, struct f2fs_node *parent,
 	int level = 0, current_depth, bit_pos;
 	int nbucket, nblock, bidx, block;
 	int slots = GET_DENTRY_SLOTS(name_len);
-	f2fs_hash_t dentry_hash = f2fs_dentry_hash(get_encoding(sbi),
-						IS_CASEFOLDED(&parent->i),
-						name, name_len);
+	f2fs_hash_t dentry_hash;
 	struct f2fs_dentry_block *dentry_blk;
 	struct f2fs_dentry_ptr d;
 	struct dnode_of_data dn;
-	nid_t pino = le32_to_cpu(parent->footer.ino);
-	unsigned int dir_level = parent->i.i_dir_level;
+	nid_t pino;
+	unsigned int dir_level;
 	int ret;
 
 	if (parent == NULL)
 		return -EINVAL;
+
+	dentry_hash = f2fs_dentry_hash(get_encoding(sbi),
+						IS_CASEFOLDED(&parent->i),
+						name, name_len);
+	pino = le32_to_cpu(parent->footer.ino);
+	dir_level = parent->i.i_dir_level;
 
 	if (!pino) {
 		ERR_MSG("Wrong parent ino:%d \n", pino);
@@ -520,7 +524,7 @@ static void init_inode_block(struct f2fs_sb_info *sbi,
 	memcpy(node_blk->i.i_name, de->name, de->len);
 	node_blk->i.i_name[de->len] = 0;
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_EXTRA_ATTR)) {
+	if (c.feature & F2FS_FEATURE_EXTRA_ATTR) {
 		node_blk->i.i_inline |= F2FS_EXTRA_ATTR;
 		node_blk->i.i_extra_isize = cpu_to_le16(calc_extra_isize());
 	}
@@ -542,7 +546,7 @@ static void init_inode_block(struct f2fs_sb_info *sbi,
 		de->link = NULL;
 	}
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CHKSUM))
+	if (c.feature & F2FS_FEATURE_INODE_CHKSUM)
 		node_blk->i.i_inode_checksum =
 			cpu_to_le32(f2fs_inode_chksum(node_blk));
 }
@@ -704,7 +708,8 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 	ret = convert_inline_dentry(sbi, parent, ni.blk_addr);
 	if (ret) {
 		MSG(0, "Convert inline dentry for pino=%x failed.\n", de->pino);
-		return -1;
+		ret = -1;
+		goto free_parent_dir;
 	}
 
 	ret = f2fs_find_entry(sbi, parent, de);
@@ -713,6 +718,7 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 					de->name, de->pino, ret);
 		if (de->file_type == F2FS_FT_REG_FILE)
 			de->ino = 0;
+		ret = 0;
 		goto free_parent_dir;
 	}
 
@@ -728,7 +734,8 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 		if (hardlink_ni.blk_addr == NULL_ADDR) {
 			MSG(1, "No original inode for hard link to_ino=%x\n",
 				found_hardlink->to_ino);
-			return -1;
+			ret = -1;
+			goto free_child_dir;
 		}
 
 		/* Use previously-recorded inode */
@@ -750,6 +757,7 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 	if (ret) {
 		MSG(0, "Skip the existing \"%s\" pino=%x ERR=%d\n",
 					de->name, de->pino, ret);
+		ret = 0;
 		goto free_child_dir;
 	}
 
@@ -804,7 +812,7 @@ free_child_dir:
 	free(child);
 free_parent_dir:
 	free(parent);
-	return 0;
+	return ret;
 }
 
 int f2fs_mkdir(struct f2fs_sb_info *sbi, struct dentry *de)

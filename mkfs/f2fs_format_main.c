@@ -75,6 +75,7 @@ static void mkfs_usage()
 	MSG(0, "  -w wanted sector size\n");
 	MSG(0, "  -z # of sections per zone [default:1]\n");
 	MSG(0, "  -V print the version number and exit\n");
+	MSG(0, "  -Z # of reserved sections [default:auto]\n");
 	MSG(0, "sectors: number of sectors [default: determined by device size]\n");
 	exit(1);
 }
@@ -100,13 +101,13 @@ static void f2fs_show_info()
 	if (c.defset == CONF_ANDROID)
 		MSG(0, "Info: Set conf for android\n");
 
-	if (c.feature & le32_to_cpu(F2FS_FEATURE_CASEFOLD))
+	if (c.feature & F2FS_FEATURE_CASEFOLD)
 		MSG(0, "Info: Enable %s with casefolding\n",
 					f2fs_encoding2str(c.s_encoding));
-	if (c.feature & le32_to_cpu(F2FS_FEATURE_PRJQUOTA))
+	if (c.feature & F2FS_FEATURE_PRJQUOTA)
 		MSG(0, "Info: Enable Project quota\n");
 
-	if (c.feature & le32_to_cpu(F2FS_FEATURE_COMPRESSION))
+	if (c.feature & F2FS_FEATURE_COMPRESSION)
 		MSG(0, "Info: Enable Compression\n");
 }
 
@@ -144,39 +145,39 @@ static void add_default_options(void)
 		c.root_uid = c.root_gid = 0;
 
 		/* RO doesn't need any other features */
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_RO))
+		if (c.feature & F2FS_FEATURE_RO)
 			return;
 
 		/* -O encrypt -O project_quota,extra_attr,{quota} -O verity */
-		c.feature |= cpu_to_le32(F2FS_FEATURE_ENCRYPT);
+		c.feature |= F2FS_FEATURE_ENCRYPT;
 		if (!kernel_version_over(4, 14))
-			c.feature |= cpu_to_le32(F2FS_FEATURE_QUOTA_INO);
-		c.feature |= cpu_to_le32(F2FS_FEATURE_PRJQUOTA);
-		c.feature |= cpu_to_le32(F2FS_FEATURE_EXTRA_ATTR);
-		c.feature |= cpu_to_le32(F2FS_FEATURE_VERITY);
+			c.feature |= F2FS_FEATURE_QUOTA_INO;
+		c.feature |= F2FS_FEATURE_PRJQUOTA;
+		c.feature |= F2FS_FEATURE_EXTRA_ATTR;
+		c.feature |= F2FS_FEATURE_VERITY;
 		break;
 	}
 #ifdef CONF_CASEFOLD
 	c.s_encoding = F2FS_ENC_UTF8_12_1;
-	c.feature |= cpu_to_le32(F2FS_FEATURE_CASEFOLD);
+	c.feature |= F2FS_FEATURE_CASEFOLD;
 #endif
 #ifdef CONF_PROJID
-	c.feature |= cpu_to_le32(F2FS_FEATURE_QUOTA_INO);
-	c.feature |= cpu_to_le32(F2FS_FEATURE_PRJQUOTA);
-	c.feature |= cpu_to_le32(F2FS_FEATURE_EXTRA_ATTR);
+	c.feature |= F2FS_FEATURE_QUOTA_INO;
+	c.feature |= F2FS_FEATURE_PRJQUOTA;
+	c.feature |= F2FS_FEATURE_EXTRA_ATTR;
 #endif
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_QUOTA_INO))
+	if (c.feature & F2FS_FEATURE_QUOTA_INO)
 		c.quota_bits = QUOTA_USR_BIT | QUOTA_GRP_BIT;
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_PRJQUOTA)) {
-		c.feature |= cpu_to_le32(F2FS_FEATURE_QUOTA_INO);
+	if (c.feature & F2FS_FEATURE_PRJQUOTA) {
+		c.feature |= F2FS_FEATURE_QUOTA_INO;
 		c.quota_bits |= QUOTA_PRJ_BIT;
 	}
 }
 
 static void f2fs_parse_options(int argc, char *argv[])
 {
-	static const char *option_string = "qa:c:C:d:e:E:g:hil:mo:O:rR:s:S:z:t:T:U:Vfw:";
+	static const char *option_string = "qa:c:C:d:e:E:g:hil:mo:O:rR:s:S:z:t:T:U:Vfw:Z:";
 	static const struct option long_opts[] = {
 		{ .name = "help", .has_arg = 0, .flag = NULL, .val = 'h' },
 		{ .name = NULL, .has_arg = 0, .flag = NULL, .val = 0 }
@@ -293,7 +294,10 @@ static void f2fs_parse_options(int argc, char *argv[])
 				MSG(0, "\tError: Unknown flag %s\n",token);
 				mkfs_usage();
 			}
-			c.feature |= cpu_to_le32(F2FS_FEATURE_CASEFOLD);
+			c.feature |= F2FS_FEATURE_CASEFOLD;
+			break;
+		case 'Z':
+			c.conf_reserved_sections = atoi(optarg);
 			break;
 		default:
 			MSG(0, "\tError: Unknown option %c\n",option);
@@ -304,28 +308,28 @@ static void f2fs_parse_options(int argc, char *argv[])
 
 	add_default_options();
 
-	if (!(c.feature & cpu_to_le32(F2FS_FEATURE_EXTRA_ATTR))) {
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_PRJQUOTA)) {
+	if (!(c.feature & F2FS_FEATURE_EXTRA_ATTR)) {
+		if (c.feature & F2FS_FEATURE_PRJQUOTA) {
 			MSG(0, "\tInfo: project quota feature should always be "
 				"enabled with extra attr feature\n");
 			exit(1);
 		}
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CHKSUM)) {
+		if (c.feature & F2FS_FEATURE_INODE_CHKSUM) {
 			MSG(0, "\tInfo: inode checksum feature should always be "
 				"enabled with extra attr feature\n");
 			exit(1);
 		}
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_FLEXIBLE_INLINE_XATTR)) {
+		if (c.feature & F2FS_FEATURE_FLEXIBLE_INLINE_XATTR) {
 			MSG(0, "\tInfo: flexible inline xattr feature should always be "
 				"enabled with extra attr feature\n");
 			exit(1);
 		}
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CRTIME)) {
+		if (c.feature & F2FS_FEATURE_INODE_CRTIME) {
 			MSG(0, "\tInfo: inode crtime feature should always be "
 				"enabled with extra attr feature\n");
 			exit(1);
 		}
-		if (c.feature & cpu_to_le32(F2FS_FEATURE_COMPRESSION)) {
+		if (c.feature & F2FS_FEATURE_COMPRESSION) {
 			MSG(0, "\tInfo: compression feature should always be "
 				"enabled with extra attr feature\n");
 			exit(1);
@@ -352,7 +356,7 @@ static void f2fs_parse_options(int argc, char *argv[])
 		c.trim = 0;
 
 	if (c.zoned_mode)
-		c.feature |= cpu_to_le32(F2FS_FEATURE_BLKZONED);
+		c.feature |= F2FS_FEATURE_BLKZONED;
 }
 
 #ifdef HAVE_LIBBLKID
@@ -487,6 +491,11 @@ int main(int argc, char *argv[])
 
 	if (c.zoned_mode && !c.trim) {
 		MSG(0, "\tError: Trim is required for zoned block devices\n");
+		goto err_format;
+	}
+
+	if (c.conf_reserved_sections && !c.zoned_mode) {
+		MSG(0, "\tError: Reserved area can't be specified on non zoned device\n");
 		goto err_format;
 	}
 
