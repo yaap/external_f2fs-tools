@@ -115,31 +115,40 @@ static uint16_t *wchar_to_utf16(uint16_t *output, wchar_t wc, size_t outsize)
 	return output + 2;
 }
 
-int utf8_to_utf16(uint16_t *output, const char *input, size_t outsize,
+int utf8_to_utf16(char *output, const char *input, size_t outsize,
 		size_t insize)
 {
 	const char *inp = input;
-	uint16_t *outp = output;
+	uint16_t *outp;
 	wchar_t wc;
+	uint16_t *volume_name = calloc(sizeof(uint16_t), MAX_VOLUME_NAME);
+
+	if (!volume_name)
+		return -ENOMEM;
+
+	outp = volume_name;
 
 	while ((size_t)(inp - input) < insize && *inp) {
 		inp = utf8_to_wchar(inp, &wc, insize - (inp - input));
 		if (inp == NULL) {
 			DBG(0, "illegal UTF-8 sequence\n");
+			free(volume_name);
 			return -EILSEQ;
 		}
-		outp = wchar_to_utf16(outp, wc, outsize - (outp - output));
+		outp = wchar_to_utf16(outp, wc, outsize - (outp - volume_name));
 		if (outp == NULL) {
 			DBG(0, "name is too long\n");
+			free(volume_name);
 			return -ENAMETOOLONG;
 		}
 	}
 	*outp = cpu_to_le16(0);
+	memcpy(output, volume_name, sizeof(uint16_t) * MAX_VOLUME_NAME);
+	free(volume_name);
 	return 0;
 }
 
-static const uint16_t *utf16_to_wchar(const uint16_t *input, wchar_t *wc,
-		size_t insize)
+static uint16_t *utf16_to_wchar(uint16_t *input, wchar_t *wc, size_t insize)
 {
 	if ((le16_to_cpu(input[0]) & 0xfc00) == 0xd800) {
 		if (insize < 2 || (le16_to_cpu(input[1]) & 0xfc00) != 0xdc00)
@@ -201,26 +210,36 @@ static char *wchar_to_utf8(char *output, wchar_t wc, size_t outsize)
 	return output;
 }
 
-int utf16_to_utf8(char *output, const uint16_t *input, size_t outsize,
+int utf16_to_utf8(char *output, const char *input, size_t outsize,
 		size_t insize)
 {
-	const uint16_t *inp = input;
 	char *outp = output;
 	wchar_t wc;
+	uint16_t *inp;
+	uint16_t *volume_name = calloc(sizeof(uint16_t), MAX_VOLUME_NAME);
 
-	while ((size_t)(inp - input) < insize && le16_to_cpu(*inp)) {
-		inp = utf16_to_wchar(inp, &wc, insize - (inp - input));
+	if (!volume_name)
+		return -ENOMEM;
+
+	memcpy(volume_name, input, sizeof(uint16_t) * MAX_VOLUME_NAME);
+	inp = volume_name;
+
+	while ((size_t)(inp - volume_name) < insize && le16_to_cpu(*inp)) {
+		inp = utf16_to_wchar(inp, &wc, insize - (inp - volume_name));
 		if (inp == NULL) {
 			DBG(0, "illegal UTF-16 sequence\n");
+			free(volume_name);
 			return -EILSEQ;
 		}
 		outp = wchar_to_utf8(outp, wc, outsize - (outp - output));
 		if (outp == NULL) {
 			DBG(0, "name is too long\n");
+			free(volume_name);
 			return -ENAMETOOLONG;
 		}
 	}
 	*outp = '\0';
+	free(volume_name);
 	return 0;
 }
 
@@ -478,8 +497,8 @@ f2fs_hash_t f2fs_dentry_hash(int encoding, int casefolded,
 
 	if (len && casefolded) {
 		buff = malloc(sizeof(char) * PATH_MAX);
-		if (!buff)
-			return -ENOMEM;
+		ASSERT(buff);
+
 		dlen = table->ops->casefold(table, name, len, buff, PATH_MAX);
 		if (dlen < 0) {
 			free(buff);
@@ -590,7 +609,7 @@ __u32 f2fs_checkpoint_chksum(struct f2fs_checkpoint *cp)
 
 int write_inode(struct f2fs_node *inode, u64 blkaddr)
 {
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CHKSUM))
+	if (c.feature & F2FS_FEATURE_INODE_CHKSUM)
 		inode->i.i_inode_checksum =
 			cpu_to_le32(f2fs_inode_chksum(inode));
 	return dev_write_block(inode, blkaddr);
@@ -1066,6 +1085,24 @@ int get_device_info(int i)
 				dev->nr_rnd_zones);
 		MSG(0, "      %zu blocks per zone\n",
 				dev->zone_blocks);
+
+		if (c.conf_reserved_sections) {
+			if (c.conf_reserved_sections < MIN_RSVD_SECS) {
+				MSG(0, "      Too small sections are reserved(%u secs)\n",
+				    c.conf_reserved_sections);
+				c.conf_reserved_sections = MIN_RSVD_SECS;
+				MSG(0, "      It is operated as a minimum reserved sections(%u secs)\n",
+				    c.conf_reserved_sections);
+			} else {
+				MSG(0, "      %u sections are reserved\n",
+				c.conf_reserved_sections);
+			}
+			if (!c.overprovision) {
+				c.overprovision = CONFIG_RSVD_DEFAULT_OP_RATIO;
+				MSG(0, "      Overprovision ratio is set to default(%.1lf%%)\n",
+				    c.overprovision);
+			}
+		}
 	}
 #endif
 	/* adjust wanted_total_sectors */
@@ -1284,15 +1321,15 @@ unsigned int calc_extra_isize(void)
 {
 	unsigned int size = offsetof(struct f2fs_inode, i_projid);
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_FLEXIBLE_INLINE_XATTR))
+	if (c.feature & F2FS_FEATURE_FLEXIBLE_INLINE_XATTR)
 		size = offsetof(struct f2fs_inode, i_projid);
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_PRJQUOTA))
+	if (c.feature & F2FS_FEATURE_PRJQUOTA)
 		size = offsetof(struct f2fs_inode, i_inode_checksum);
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CHKSUM))
+	if (c.feature & F2FS_FEATURE_INODE_CHKSUM)
 		size = offsetof(struct f2fs_inode, i_crtime);
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CRTIME))
+	if (c.feature & F2FS_FEATURE_INODE_CRTIME)
 		size = offsetof(struct f2fs_inode, i_compr_blocks);
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_COMPRESSION))
+	if (c.feature & F2FS_FEATURE_COMPRESSION)
 		size = offsetof(struct f2fs_inode, i_extra_end);
 
 	return size - F2FS_EXTRA_ISIZE_OFFSET;
