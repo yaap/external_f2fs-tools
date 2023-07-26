@@ -413,9 +413,13 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define fallocate_desc "fallocate"
 #define fallocate_help						\
-"f2fs_io fallocate [keep_size] [offset] [length] [file]\n\n"	\
+"f2fs_io fallocate [-c] [-i] [-p] [-z] [keep_size] [offset] [length] [file]\n\n"	\
 "fallocate given the file\n"					\
 " [keep_size] : 1 or 0\n"					\
+" -c : collapse range\n"					\
+" -i : insert range\n"						\
+" -p : punch hole\n"						\
+" -z : zero range\n"						\
 
 static void do_fallocate(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -423,20 +427,43 @@ static void do_fallocate(int argc, char **argv, const struct cmd_desc *cmd)
 	off_t offset, length;
 	struct stat sb;
 	int mode = 0;
+	int c;
 
-	if (argc != 5) {
+	while ((c = getopt(argc, argv, "cipz")) != -1) {
+		switch (c) {
+		case 'c':
+			mode |= FALLOC_FL_COLLAPSE_RANGE;
+			break;
+		case 'i':
+			mode |= FALLOC_FL_INSERT_RANGE;
+			break;
+		case 'p':
+			mode |= FALLOC_FL_PUNCH_HOLE;
+			break;
+		case 'z':
+			mode |= FALLOC_FL_ZERO_RANGE;
+			break;
+		default:
+			fputs(cmd->cmd_help, stderr);
+			exit(2);
+		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc != 4) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
 	}
 
-	if (!strcmp(argv[1], "1"))
+	if (!strcmp(argv[0], "1"))
 		mode |= FALLOC_FL_KEEP_SIZE;
 
-	offset = atoi(argv[2]);
-	length = atoll(argv[3]);
+	offset = atoi(argv[1]);
+	length = atoll(argv[2]);
 
-	fd = xopen(argv[4], O_RDWR, 0);
+	fd = xopen(argv[3], O_RDWR, 0);
 
 	if (fallocate(fd, mode, offset, length) != 0)
 		die_errno("fallocate failed");
@@ -809,8 +836,8 @@ static void do_fiemap(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 
 	memset(fm, 0, sizeof(struct fiemap));
-	start = atoi(argv[1]) * F2FS_BLKSIZE;
-	length = atoi(argv[2]) * F2FS_BLKSIZE;
+	start = (u64)atoi(argv[1]) * F2FS_BLKSIZE;
+	length = (u64)atoi(argv[2]) * F2FS_BLKSIZE;
 	fm->fm_start = start;
 	fm->fm_length = length;
 
@@ -1311,6 +1338,121 @@ static void do_gc(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define checkpoint_desc "trigger filesystem checkpoint"
+#define checkpoint_help "f2fs_io checkpoint [file_path]\n\n"
+
+static void do_checkpoint(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_WRONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_WRITE_CHECKPOINT);
+	if (ret < 0)
+		die_errno("F2FS_IOC_WRITE_CHECKPOINT failed");
+
+	printf("trigger filesystem checkpoint ret=%d\n", ret);
+	exit(0);
+}
+
+#define precache_extents_desc "trigger precache extents"
+#define precache_extents_help "f2fs_io precache_extents [file_path]\n\n"
+
+static void do_precache_extents(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_WRONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_PRECACHE_EXTENTS);
+	if (ret < 0)
+		die_errno("F2FS_IOC_PRECACHE_EXTENTS failed");
+
+	printf("trigger precache extents ret=%d\n", ret);
+	exit(0);
+}
+
+#define move_range_desc "moving a range of data blocks from source file to destination file"
+#define move_range_help						\
+"f2fs_io move_range [src_path] [dst_path] [src_start] [dst_start] "	\
+"[length]\n\n"								\
+"  src_path  : path to source file\n"					\
+"  dst_path  : path to destination file\n"				\
+"  src_start : start offset of src file move region, unit: bytes\n"	\
+"  dst_start : start offset of dst file move region, unit: bytes\n"	\
+"  length    : size to move\n"						\
+
+static void do_move_range(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	struct f2fs_move_range range;
+	int ret, fd;
+
+	if (argc != 6) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_RDWR, 0);
+	range.dst_fd = xopen(argv[2], O_RDWR | O_CREAT, 0644);
+	range.pos_in = atoi(argv[3]);
+	range.pos_out = atoi(argv[4]);
+	range.len = atoi(argv[5]);
+
+	ret = ioctl(fd, F2FS_IOC_MOVE_RANGE, &range);
+	if (ret < 0)
+		die_errno("F2FS_IOC_MOVE_RANGE failed");
+
+	printf("move range ret=%d\n", ret);
+	exit(0);
+}
+
+#define gc_range_desc "trigger filesystem gc_range"
+#define gc_range_help "f2fs_io gc_range [sync_mode] [start] [length] [file_path]\n\n"\
+"  sync_mode : 0: asynchronous, 1: synchronous\n"			\
+"  start     : start offset of defragment region, unit: 4kb\n"	\
+"  length    : bytes number of defragment region, unit: 4kb\n"	\
+
+static void do_gc_range(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	struct f2fs_gc_range range;
+	int ret, fd;
+
+	if (argc != 5) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	range.sync = atoi(argv[1]);
+	range.start = (u64)atoi(argv[2]);
+	range.len = (u64)atoi(argv[3]);
+
+	fd = xopen(argv[4], O_RDWR, 0);
+
+	ret = ioctl(fd, F2FS_IOC_GARBAGE_COLLECT_RANGE, &range);
+	if (ret < 0) {
+		die_errno("F2FS_IOC_GARBAGE_COLLECT_RANGE failed");
+	}
+
+	printf("trigger %s gc_range [%"PRIu64", %"PRIu64"] ret=%d\n",
+		range.sync ? "synchronous" : "asynchronous",
+		range.start, range.len, ret);
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -1343,6 +1485,10 @@ const struct cmd_desc cmd_list[] = {
 	CMD(get_filename_encrypt_mode),
 	CMD(rename),
 	CMD(gc),
+	CMD(checkpoint),
+	CMD(precache_extents),
+	CMD(move_range),
+	CMD(gc_range),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 
