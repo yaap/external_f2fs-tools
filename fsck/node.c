@@ -57,7 +57,12 @@ int f2fs_rebuild_qf_inode(struct f2fs_sb_info *sbi, int qtype)
 		MSG(1, "\tError: Calloc Failed for raw_node!!!\n");
 		return -ENOMEM;
 	}
-	f2fs_init_qf_inode(sb, raw_node, qtype, time(NULL));
+	f2fs_init_inode(sb, raw_node,
+			le32_to_cpu(sb->qf_ino[qtype]), time(NULL), 0x8180);
+
+	raw_node->i.i_size = cpu_to_le64(1024 * 6);
+	raw_node->i.i_blocks = cpu_to_le64(1);
+	raw_node->i.i_flags = F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
 
 	if (is_set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG))
 		cp_ver |= (cur_cp_crc(ckpt) << 32);
@@ -137,7 +142,7 @@ block_t new_node_block(struct f2fs_sb_info *sbi,
 			type = CURSEG_WARM_NODE;
 	}
 
-	if ((get_sb(feature) & cpu_to_le32(F2FS_FEATURE_RO)) &&
+	if ((get_sb(feature) & F2FS_FEATURE_RO) &&
 					type != CURSEG_HOT_NODE)
 		type = CURSEG_HOT_NODE;
 

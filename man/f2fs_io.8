@@ -43,10 +43,27 @@ going down with fsck mark
 \fBpinfile\fR \fI[get|set] [file]\fR
 Get or set the pinning status on a file.
 .TP
-\fBfallocate\fR \fI[keep_size] [offset] [length] [file]\fR
+\fBfallocate\fR \fI[-c] [-i] [-p] [-z] [keep_size] [offset] [length] [file]\fR
 Request that space be allocated on a file.  The
 .I keep_size
 parameter can be either 1 or 0.
+The
+.I pattern
+parameter can be:
+.RS 1.2in
+.TP
+.B -c
+collapse range
+.TP
+.B -i
+insert range
+.TP
+.B -p
+punch hole
+.TP
+.B -z
+zero range
+.RE
 .TP
 \fBwrite\fR \fI[chunk_size in 4kb] [offset in chunk_size] [count] [pattern] [IO] [file_path]\fR
 Write a given pattern to
@@ -135,6 +152,18 @@ Reserve free blocks to prepare decompressing blocks in the file.
 .TP
 \fBgc\fR \fI[sync_mode] [file]\fR
 Trigger filesystem GC
+.TP
+\fBcheckpoint\fR \fI[file]\fR
+Trigger filesystem checkpoint
+.TP
+\fBprecache_extents\fR \fI[file]\fR
+Trigger precache extents
+.TP
+\fBmove_range\fR \fI[src_path] [dst_path] [src_start] [dst_start] [length]\fR
+Move a range of data blocks from source file to destination file
+.TP
+\fBgc_range\fR \fI[sync_mode] [start in 4kb] [length in 4kb] [file]\fR
+Trigger gc to move data blocks from specified address range
 .SH AUTHOR
 This version of
 .B f2fs_io
