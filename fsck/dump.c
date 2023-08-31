@@ -354,6 +354,7 @@ static void dump_node_blk(struct f2fs_sb_info *sbi, int ntype,
 static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk)
 {
 	void *xattr;
+	void *last_base_addr;
 	struct f2fs_xattr_entry *ent;
 	char xattr_name[F2FS_NAME_LEN] = {0};
 	int ret;
@@ -362,9 +363,17 @@ static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk)
 	if (!xattr)
 		return;
 
+	last_base_addr = (void *)xattr + XATTR_SIZE(&node_blk->i);
+
 	list_for_each_xattr(ent, xattr) {
 		char *name = strndup(ent->e_name, ent->e_name_len);
 		void *value = ent->e_name + ent->e_name_len;
+
+		if ((void *)(ent) + sizeof(__u32) > last_base_addr ||
+			(void *)XATTR_NEXT_ENTRY(ent) > last_base_addr) {
+			MSG(0, "xattr entry crosses the end of xattr space\n");
+			break;
+		}
 
 		if (!name)
 			continue;
@@ -596,9 +605,7 @@ int dump_node(struct f2fs_sb_info *sbi, nid_t nid, int force)
 
 	dev_read_block(node_blk, ni.blk_addr);
 
-	if (ni.blk_addr == 0x0)
-		MSG(force, "Invalid nat entry\n\n");
-	else if (!is_sit_bitmap_set(sbi, ni.blk_addr))
+	if (!is_sit_bitmap_set(sbi, ni.blk_addr))
 		MSG(force, "Invalid sit bitmap, %u\n\n", ni.blk_addr);
 
 	DBG(1, "node_blk.footer.ino [0x%x]\n", le32_to_cpu(node_blk->footer.ino));
