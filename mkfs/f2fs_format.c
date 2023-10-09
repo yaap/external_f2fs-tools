@@ -927,8 +927,8 @@ static int f2fs_write_check_point_pack(void)
 	sum_compact_p += SUM_JOURNAL_SIZE;
 
 	/* hot data summary */
-	memset(sum, 0, sizeof(struct f2fs_summary_block));
-	SET_SUM_TYPE((&sum->footer), SUM_TYPE_DATA);
+	memset(sum, 0, F2FS_BLKSIZE);
+	SET_SUM_TYPE(sum, SUM_TYPE_DATA);
 
 	sum_entry = (struct f2fs_summary *)sum_compact_p;
 	memcpy(sum_entry, c.sum[CURSEG_HOT_DATA],
@@ -946,8 +946,8 @@ static int f2fs_write_check_point_pack(void)
 	}
 
 	/* Prepare and write Segment summary for HOT_NODE */
-	memset(sum, 0, sizeof(struct f2fs_summary_block));
-	SET_SUM_TYPE((&sum->footer), SUM_TYPE_NODE);
+	memset(sum, 0, F2FS_BLKSIZE);
+	SET_SUM_TYPE(sum, SUM_TYPE_NODE);
 	memcpy(sum->entries, c.sum[CURSEG_HOT_NODE],
 			sizeof(struct f2fs_summary) * MAX_CACHE_SUMS);
 
@@ -960,8 +960,8 @@ static int f2fs_write_check_point_pack(void)
 	}
 
 	/* Fill segment summary for WARM_NODE to zero. */
-	memset(sum, 0, sizeof(struct f2fs_summary_block));
-	SET_SUM_TYPE((&sum->footer), SUM_TYPE_NODE);
+	memset(sum, 0, F2FS_BLKSIZE);
+	SET_SUM_TYPE(sum, SUM_TYPE_NODE);
 
 	cp_seg_blk++;
 	DBG(1, "\tWriting Segment summary for WARM_NODE, at offset 0x%08"PRIx64"\n",
@@ -972,8 +972,8 @@ static int f2fs_write_check_point_pack(void)
 	}
 
 	/* Fill segment summary for COLD_NODE to zero. */
-	memset(sum, 0, sizeof(struct f2fs_summary_block));
-	SET_SUM_TYPE((&sum->footer), SUM_TYPE_NODE);
+	memset(sum, 0, F2FS_BLKSIZE);
+	SET_SUM_TYPE(sum, SUM_TYPE_NODE);
 	cp_seg_blk++;
 	DBG(1, "\tWriting Segment summary for COLD_NODE, at offset 0x%08"PRIx64"\n",
 			cp_seg_blk);
@@ -1104,7 +1104,7 @@ static int f2fs_discard_obsolete_dnode(void)
 	if (c.zoned_mode || c.feature & F2FS_FEATURE_RO)
 		return 0;
 
-	raw_node = calloc(sizeof(struct f2fs_node), 1);
+	raw_node = calloc(F2FS_BLKSIZE, 1);
 	if (raw_node == NULL) {
 		MSG(1, "\tError: Calloc Failed for discard_raw_node!!!\n");
 		return -1;
@@ -1128,7 +1128,7 @@ static int f2fs_discard_obsolete_dnode(void)
 			return -1;
 		}
 
-		next_blkaddr = le32_to_cpu(raw_node->footer.next_blkaddr);
+		next_blkaddr = le32_to_cpu(F2FS_NODE_FOOTER(raw_node)->next_blkaddr);
 		memset(raw_node, 0, F2FS_BLKSIZE);
 
 		DBG(1, "\tDiscard dnode, at offset 0x%08"PRIx64"\n", offset);
@@ -1217,17 +1217,17 @@ static block_t f2fs_add_default_dentry_root(void)
 		return 0;
 	}
 
-	dent_blk->dentry[0].hash_code = 0;
-	dent_blk->dentry[0].ino = sb->root_ino;
-	dent_blk->dentry[0].name_len = cpu_to_le16(1);
-	dent_blk->dentry[0].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[0], ".", 1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).ino = sb->root_ino;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).name_len = cpu_to_le16(1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 0), ".", 1);
 
-	dent_blk->dentry[1].hash_code = 0;
-	dent_blk->dentry[1].ino = sb->root_ino;
-	dent_blk->dentry[1].name_len = cpu_to_le16(2);
-	dent_blk->dentry[1].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[1], "..", 2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).ino = sb->root_ino;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).name_len = cpu_to_le16(2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 1), "..", 2);
 
 	/* bitmap for . and .. */
 	test_and_set_bit_le(0, dent_blk->dentry_bitmap);
@@ -1237,13 +1237,13 @@ static block_t f2fs_add_default_dentry_root(void)
 		int len = strlen(LPF);
 		f2fs_hash_t hash = f2fs_dentry_hash(0, 0, (unsigned char *)LPF, len);
 
-		dent_blk->dentry[2].hash_code = cpu_to_le32(hash);
-		dent_blk->dentry[2].ino = cpu_to_le32(c.lpf_ino);
-		dent_blk->dentry[2].name_len = cpu_to_le16(len);
-		dent_blk->dentry[2].file_type = F2FS_FT_DIR;
-		memcpy(dent_blk->filename[2], LPF, F2FS_SLOT_LEN);
+		F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 2).hash_code = cpu_to_le32(hash);
+		F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 2).ino = cpu_to_le32(c.lpf_ino);
+		F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 2).name_len = cpu_to_le16(len);
+		F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 2).file_type = F2FS_FT_DIR;
+		memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 2), LPF, F2FS_SLOT_LEN);
 
-		memcpy(dent_blk->filename[3], &LPF[F2FS_SLOT_LEN],
+		memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 3), &LPF[F2FS_SLOT_LEN],
 				len - F2FS_SLOT_LEN);
 
 		test_and_set_bit_le(2, dent_blk->dentry_bitmap);
@@ -1295,7 +1295,7 @@ static int f2fs_write_root_inode(void)
 				cpu_to_le32(data_blkaddr);
 
 	node_blkaddr = alloc_next_free_block(CURSEG_HOT_NODE);
-	raw_node->footer.next_blkaddr = cpu_to_le32(node_blkaddr + 1);
+	F2FS_NODE_FOOTER(raw_node)->next_blkaddr = cpu_to_le32(node_blkaddr + 1);
 
 	DBG(1, "\tWriting root inode (hot node), offset 0x%x\n", node_blkaddr);
 	if (write_inode(raw_node, node_blkaddr) < 0) {
@@ -1370,7 +1370,7 @@ static int f2fs_write_default_quota(int qtype, __le32 raw_id)
 
 	memcpy(filebuf + 5136, &dqblk, sizeof(struct v2r1_disk_dqblk));
 
-	/* Write two blocks */
+	/* Write quota blocks */
 	for (i = 0; i < QUOTA_DATA; i++) {
 		blkaddr = alloc_next_free_block(CURSEG_HOT_DATA);
 
@@ -1383,13 +1383,13 @@ static int f2fs_write_default_quota(int qtype, __le32 raw_id)
 		update_sit_journal(CURSEG_HOT_DATA);
 		update_summary_entry(CURSEG_HOT_DATA,
 					le32_to_cpu(sb->qf_ino[qtype]), i);
+		DBG(1, "\tWriting quota data, at offset %08x (%d/%d)\n",
+						blkaddr, i + 1, QUOTA_DATA);
+
 	}
 
-	DBG(1, "\tWriting quota data, at offset %08x, %08x\n",
-					blkaddr - 1, blkaddr);
-
 	free(filebuf);
-	return blkaddr - 1;
+	return blkaddr + 1 - QUOTA_DATA;
 }
 
 static int f2fs_write_qf_inode(int qtype)
@@ -1413,7 +1413,7 @@ static int f2fs_write_qf_inode(int qtype)
 	raw_node->i.i_flags = F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
 
 	node_blkaddr = alloc_next_free_block(CURSEG_HOT_NODE);
-	raw_node->footer.next_blkaddr = cpu_to_le32(node_blkaddr + 1);
+	F2FS_NODE_FOOTER(raw_node)->next_blkaddr = cpu_to_le32(node_blkaddr + 1);
 
 	if (qtype == 0)
 		raw_id = raw_node->i.i_uid;
@@ -1424,7 +1424,7 @@ static int f2fs_write_qf_inode(int qtype)
 	else
 		ASSERT(0);
 
-	/* write two blocks */
+	/* write quota blocks */
 	data_blkaddr = f2fs_write_default_quota(qtype, raw_id);
 	if (data_blkaddr == 0) {
 		free(raw_node);
@@ -1494,17 +1494,17 @@ static block_t f2fs_add_default_dentry_lpf(void)
 		return 0;
 	}
 
-	dent_blk->dentry[0].hash_code = 0;
-	dent_blk->dentry[0].ino = cpu_to_le32(c.lpf_ino);
-	dent_blk->dentry[0].name_len = cpu_to_le16(1);
-	dent_blk->dentry[0].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[0], ".", 1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).ino = cpu_to_le32(c.lpf_ino);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).name_len = cpu_to_le16(1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 0), ".", 1);
 
-	dent_blk->dentry[1].hash_code = 0;
-	dent_blk->dentry[1].ino = sb->root_ino;
-	dent_blk->dentry[1].name_len = cpu_to_le16(2);
-	dent_blk->dentry[1].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[1], "..", 2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).ino = sb->root_ino;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).name_len = cpu_to_le16(2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 1), "..", 2);
 
 	test_and_set_bit_le(0, dent_blk->dentry_bitmap);
 	test_and_set_bit_le(1, dent_blk->dentry_bitmap);
@@ -1548,7 +1548,7 @@ static int f2fs_write_lpf_inode(void)
 	memcpy(raw_node->i.i_name, LPF, strlen(LPF));
 
 	node_blkaddr = alloc_next_free_block(CURSEG_HOT_NODE);
-	raw_node->footer.next_blkaddr = cpu_to_le32(node_blkaddr + 1);
+	F2FS_NODE_FOOTER(raw_node)->next_blkaddr = cpu_to_le32(node_blkaddr + 1);
 
 	data_blkaddr = f2fs_add_default_dentry_lpf();
 	if (data_blkaddr == 0) {
