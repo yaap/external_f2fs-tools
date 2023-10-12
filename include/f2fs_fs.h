@@ -3,8 +3,6 @@
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
  *             http://www.samsung.com/
- * Copyright (c) 2019 Google Inc.
- *             http://www.google.com/
  * Copyright (c) 2020 Google Inc.
  *   Robin Hsu <robinhsu@google.com>
  *  : add sload compression support
@@ -21,6 +19,7 @@
 #define __SANE_USERSPACE_TYPES__       /* For PPC64, to get LL64 types */
 #endif
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -235,6 +234,13 @@ static inline uint64_t bswap_64(uint64_t val)
 /*
  * Debugging interfaces
  */
+
+#define INFO_MSG(fmt, ...)						\
+	do {								\
+		printf("[INFO] (%s:%4d) ", __func__, __LINE__);		\
+		printf(" --> "fmt"\n", ##__VA_ARGS__);			\
+	} while (0)
+
 #define FIX_MSG(fmt, ...)						\
 	do {								\
 		printf("[FIX] (%s:%4d) ", __func__, __LINE__);		\
@@ -385,20 +391,21 @@ static inline uint64_t bswap_64(uint64_t val)
 #define SECTOR_SHIFT		9
 #endif
 #define F2FS_SUPER_MAGIC	0xF2F52010	/* F2FS Magic Number */
-#define CP_CHKSUM_OFFSET	4092
+#define CP_CHKSUM_OFFSET	(F2FS_BLKSIZE - sizeof(__le32))
 #define SB_CHKSUM_OFFSET	3068
 #define MAX_PATH_LEN		64
 #define MAX_DEVICES		8
 
 #define F2FS_BYTES_TO_BLK(bytes)    ((bytes) >> F2FS_BLKSIZE_BITS)
-#define F2FS_BLKSIZE_BITS 12
+#define F2FS_BLKSIZE_BITS c.blksize_bits
 
 /* for mkfs */
 #define	F2FS_NUMBER_OF_CHECKPOINT_PACK	2
 #define	DEFAULT_SECTOR_SIZE		512
-#define	DEFAULT_SECTORS_PER_BLOCK	8
+#define	DEFAULT_SECTORS_PER_BLOCK	(1 << (F2FS_BLKSIZE_BITS - SECTOR_SHIFT))
 #define	DEFAULT_BLOCKS_PER_SEGMENT	512
 #define DEFAULT_SEGMENTS_PER_SECTION	1
+#define DEFAULT_BLKSIZE_BITS		12	/* 4096	*/
 
 #define VERSION_LEN		256
 #define VERSION_TIMESTAMP_LEN	4
@@ -442,16 +449,6 @@ struct device_info {
 	uint64_t zone_size;
 	size_t *zone_cap_blocks;
 };
-
-typedef struct {
-	/* Value 0 means no cache, minimum 1024 */
-	long num_cache_entry;
-
-	/* Value 0 means always overwrite (no collision allowed). maximum 16 */
-	unsigned max_hash_collision;
-
-	bool dbg_en;
-} dev_cache_config_t;
 
 /* f2fs_configration for compression used for sload.f2fs */
 typedef struct  {
@@ -619,16 +616,18 @@ enum {
 /*
  * Copied from fs/f2fs/segment.h
  */
-#define GET_SUM_TYPE(footer) ((footer)->entry_type)
-#define SET_SUM_TYPE(footer, type) ((footer)->entry_type = type)
+#define GET_SUM_TYPE(sum) (F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type)
+#define SET_SUM_TYPE(sum, type) (F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type = type)
 
 /*
  * Copied from include/linux/f2fs_sb.h
  */
 #define F2FS_SUPER_OFFSET		1024	/* byte-size offset */
 #define F2FS_MIN_LOG_SECTOR_SIZE	9	/* 9 bits for 512 bytes */
-#define F2FS_MAX_LOG_SECTOR_SIZE	12	/* 12 bits for 4096 bytes */
-#define F2FS_BLKSIZE			4096	/* support only 4KB block */
+#define F2FS_MAX_LOG_SECTOR_SIZE	F2FS_BLKSIZE_BITS	/* max sector size is block size */
+#define F2FS_MIN_BLKSIZE		4096
+#define F2FS_MAX_BLKSIZE		16384
+#define F2FS_BLKSIZE			c.blksize	/* support configurable block size */
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
 #define F2FS_EXTENSION_LEN		8	/* max size of extension */
 #define F2FS_BLK_ALIGN(x)	(((x) + F2FS_BLKSIZE - 1) / F2FS_BLKSIZE)
@@ -642,7 +641,7 @@ enum {
 #define F2FS_META_INO(sbi)	(sbi->meta_ino_num)
 
 #define F2FS_MAX_QUOTAS		3
-#define QUOTA_DATA		2
+#define QUOTA_DATA		(((1024 * 6 - 1) / F2FS_BLKSIZE) + 1)
 #define QUOTA_INO(sb,t)	(le32_to_cpu((sb)->qf_ino[t]))
 
 /*
@@ -853,18 +852,27 @@ static_assert(sizeof(struct f2fs_checkpoint) == 192, "");
 /*
  * For orphan inode management
  */
-#define F2FS_ORPHANS_PER_BLOCK	1020
+#define F2FS_ORPHANS_PER_BLOCK	((F2FS_BLKSIZE - 4 * sizeof(__le32)) / sizeof(__le32))
 
+/*
+ * On disk layout is:
+ * __le32 ino[F2FS_ORPHANS_PER_BLOCK];
+ * struct f2fs_ophan_block_footer
+ *
+ * Do NOT use sizeof, use F2FS_BLKSIZE instead
+ */
 struct f2fs_orphan_block {
-	__le32 ino[F2FS_ORPHANS_PER_BLOCK];	/* inode numbers */
+	__le32 ino[0];	/* F2FS_ORPHANS_PER_BLOCK inode numbers */
+};
+#define F2FS_ORPHAN_BLOCK_FOOTER(blk) ((struct orphan_block_footer *)&(blk)->ino[F2FS_ORPHANS_PER_BLOCK])
+
+struct orphan_block_footer {
 	__le32 reserved;	/* reserved */
 	__le16 blk_addr;	/* block index in current CP */
 	__le16 blk_count;	/* Number of orphan inode blocks in CP */
 	__le32 entry_count;	/* Total number of orphan nodes in current CP */
 	__le32 check_sum;	/* CRC32 for orphan inode block */
 };
-
-static_assert(sizeof(struct f2fs_orphan_block) == 4096, "");
 
 /*
  * For NODE structure
@@ -884,13 +892,31 @@ static_assert(sizeof(struct f2fs_extent) == 12, "");
 
 /* 200 bytes for inline xattrs by default */
 #define DEFAULT_INLINE_XATTR_ADDRS	50
-#define DEF_ADDRS_PER_INODE	923	/* Address Pointers in an Inode */
+
+struct node_footer {
+	__le32 nid;   /* node id */
+	__le32 ino;   /* inode number */
+	__le32 flag;    /* include cold/fsync/dentry marks and offset */
+	__le64 cp_ver __attribute__((packed));    /* checkpoint version */
+	__le32 next_blkaddr;  /* next node page block address */
+};
+
+static_assert(sizeof(struct node_footer) == 24, "");
+
+#define OFFSET_OF_END_OF_I_EXT    360
+#define SIZE_OF_I_NID     20
+/* Address Pointers in an Inode */
+#define DEF_ADDRS_PER_INODE ((F2FS_BLKSIZE - OFFSET_OF_END_OF_I_EXT \
+				- SIZE_OF_I_NID \
+				- sizeof(struct node_footer)) / sizeof(__le32))
 #define CUR_ADDRS_PER_INODE(inode)	(DEF_ADDRS_PER_INODE - \
 					__get_extra_isize(inode))
 #define ADDRS_PER_INODE(i)	addrs_per_inode(i)
-#define DEF_ADDRS_PER_BLOCK	1018	/* Address Pointers in a Direct Block */
+/* Address Pointers in a Direct Block */
+#define DEF_ADDRS_PER_BLOCK ((F2FS_BLKSIZE - sizeof(struct node_footer)) / sizeof(__le32))
 #define ADDRS_PER_BLOCK(i)	addrs_per_block(i)
-#define NIDS_PER_BLOCK          1018	/* Node IDs in an Indirect Block */
+/* Node IDs in an Indirect Block */
+#define NIDS_PER_BLOCK    ((F2FS_BLKSIZE - sizeof(struct node_footer)) / sizeof(__le32))
 
 #define	NODE_DIR1_BLOCK		(DEF_ADDRS_PER_INODE + 1)
 #define	NODE_DIR2_BLOCK		(DEF_ADDRS_PER_INODE + 2)
@@ -967,6 +993,14 @@ struct f2fs_compr_blk_cnt {
  * inode flags
  */
 #define F2FS_COMPR_FL		0x00000004 /* Compress file */
+/*
+ * On disk layout is
+ * struct f2fs_inode
+ * struct f2fs_inode_nids
+ *
+ * where the size of f2fs_inode depends on block size.
+ * Do NOT use sizeof
+ */
 struct f2fs_inode {
 	__le16 i_mode;			/* file mode */
 	__u8 i_advise;			/* file hints */
@@ -1016,27 +1050,27 @@ struct f2fs_inode {
 						 */
 			__le32 i_extra_end[0];	/* for attribute size calculation */
 		} __attribute__((packed));
-		__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks */
+		__le32 i_addr[0];	/* Pointers to DEF_ADDRS_PER_INODE data blocks */
 	};
+};
+struct f2fs_inode_nids {
 	__le32 i_nid[5];		/* direct(2), indirect(2),
 						double_indirect(1) node id */
 };
 
+#define F2FS_INODE_NIDS(inode) ((struct f2fs_inode_nids *)(&(inode)->i_addr[DEF_ADDRS_PER_INODE]))
+#define F2FS_INODE_I_NID(inode, i) (F2FS_INODE_NIDS((inode))->i_nid[(i)])
+
 static_assert(offsetof(struct f2fs_inode, i_extra_end) -
 	      offsetof(struct f2fs_inode, i_extra_isize) == 36, "");
-static_assert(sizeof(struct f2fs_inode) == 4072, "");
 
 struct direct_node {
-	__le32 addr[DEF_ADDRS_PER_BLOCK];	/* array of data block address */
+	__le32 addr[0];	/* array of DEF_ADDRS_PER_BLOCK data block address */
 };
-
-static_assert(sizeof(struct direct_node) == 4072, "");
 
 struct indirect_node {
-	__le32 nid[NIDS_PER_BLOCK];	/* array of data block address */
+	__le32 nid[0];	/* array of NIDS_PER_BLOCK data block address */
 };
-
-static_assert(sizeof(struct indirect_node) == 4072, "");
 
 enum {
 	COLD_BIT_SHIFT = 0,
@@ -1047,16 +1081,14 @@ enum {
 
 #define XATTR_NODE_OFFSET	((((unsigned int)-1) << OFFSET_BIT_SHIFT) \
 				>> OFFSET_BIT_SHIFT)
-struct node_footer {
-	__le32 nid;		/* node id */
-	__le32 ino;		/* inode nunmber */
-	__le32 flag;		/* include cold/fsync/dentry marks and offset */
-	__le64 cp_ver __attribute__((packed));		/* checkpoint version */
-	__le32 next_blkaddr;	/* next node page block address */
-};
-
-static_assert(sizeof(struct node_footer) == 24, "");
-
+/*
+ * On disk format is:
+ * struct f2fs_node
+ * struct node_footer
+ *
+ * where the size of f2fs_node depends on Block Size.
+ * Do NOT use sizeof. Use F2FS_BLKSIZE instead.
+ */
 struct f2fs_node {
 	/* can be one of three types: inode, direct, and indirect types */
 	union {
@@ -1064,10 +1096,9 @@ struct f2fs_node {
 		struct direct_node dn;
 		struct indirect_node in;
 	};
-	struct node_footer footer;
 };
-
-static_assert(sizeof(struct f2fs_node) == 4096, "");
+#define F2FS_NODE_FOOTER(blk) ((struct node_footer *)\
+				&(((char *)(&(blk)->i))[F2FS_BLKSIZE - sizeof(struct node_footer)]))
 
 /*
  * For NAT entries
@@ -1086,10 +1117,8 @@ struct f2fs_nat_entry {
 static_assert(sizeof(struct f2fs_nat_entry) == 9, "");
 
 struct f2fs_nat_block {
-	struct f2fs_nat_entry entries[NAT_ENTRY_PER_BLOCK];
+	struct f2fs_nat_entry entries[0]; /* NAT_ENTRY_PER_BLOCK */
 };
-
-static_assert(sizeof(struct f2fs_nat_block) == 4095, "");
 
 /*
  * For SIT entries
@@ -1136,17 +1165,19 @@ struct f2fs_sit_entry {
 
 static_assert(sizeof(struct f2fs_sit_entry) == 74, "");
 
+/*
+ * On disk layout is:
+ * struct f2fs_sit_entry entries[SIT_ENTRY_PER_BLOCK];
+ */
 struct f2fs_sit_block {
-	struct f2fs_sit_entry entries[SIT_ENTRY_PER_BLOCK];
+	struct f2fs_sit_entry entries[0];
 };
-
-static_assert(sizeof(struct f2fs_sit_block) == 4070, "");
 
 /*
  * For segment summary
  *
- * One summary block contains exactly 512 summary entries, which represents
- * exactly 2MB segment by default. Not allow to change the basic units.
+ * One summary block contains exactly 2048 summary entries, which represents
+ * exactly 32MB segment by default. Not allow to change the basic units.
  *
  * NOTE: For initializing fields, you must use set_summary
  *
@@ -1157,7 +1188,7 @@ static_assert(sizeof(struct f2fs_sit_block) == 4070, "");
  * from node's page's beginning to get a data block address.
  * ex) data_blkaddr = (block_t)(nodepage_start_address + ofs_in_node)
  */
-#define ENTRIES_IN_SUM		512
+#define ENTRIES_IN_SUM		(F2FS_BLKSIZE / 8)
 #define	SUMMARY_SIZE		(7)	/* sizeof(struct summary) */
 #define	SUM_FOOTER_SIZE		(5)	/* sizeof(struct summary_footer) */
 #define SUM_ENTRIES_SIZE	(SUMMARY_SIZE * ENTRIES_IN_SUM)
@@ -1220,12 +1251,14 @@ struct nat_journal_entry {
 
 static_assert(sizeof(struct nat_journal_entry) == 13, "");
 
+/*
+ * Layout is as follows:
+ * struct nat_journal_entry entries[NAT_JOURNAL_ENTRIES];
+ * __u8 reserved[NAT_JOURNAL_RESERVED];
+ */
 struct nat_journal {
-	struct nat_journal_entry entries[NAT_JOURNAL_ENTRIES];
-	__u8 reserved[NAT_JOURNAL_RESERVED];
+	struct nat_journal_entry entries[0];
 };
-
-static_assert(sizeof(struct nat_journal) == 505, "");
 
 struct sit_journal_entry {
 	__le32 segno;
@@ -1234,20 +1267,28 @@ struct sit_journal_entry {
 
 static_assert(sizeof(struct sit_journal_entry) == 78, "");
 
+/*
+ * Layout is as follows:
+ * struct sit_journal_entry entries[SIT_JOURNAL_ENTRIES];
+ * __u8 reserved[SIT_JOURNAL_RESERVED];
+ */
 struct sit_journal {
-	struct sit_journal_entry entries[SIT_JOURNAL_ENTRIES];
-	__u8 reserved[SIT_JOURNAL_RESERVED];
+	struct sit_journal_entry entries[0];
 };
 
-static_assert(sizeof(struct sit_journal) == 505, "");
-
+/*
+ * Layout is as follows:
+ * __le64 kbytes_written;
+ * __u8 reserved[EXTRA_INFO_RESERVED];
+ */
 struct f2fs_extra_info {
 	__le64 kbytes_written;
-	__u8 reserved[EXTRA_INFO_RESERVED];
+	__u8 reserved[0];
 } __attribute__((packed));
 
-static_assert(sizeof(struct f2fs_extra_info) == 505, "");
-
+/*
+ * This struct's used size depends on F2FS_BLKSIZE. DO NOT use sizeof
+ */
 struct f2fs_journal {
 	union {
 		__le16 n_nats;
@@ -1261,16 +1302,22 @@ struct f2fs_journal {
 	};
 } __attribute__((packed));
 
-static_assert(sizeof(struct f2fs_journal) == 507, "");
-
-/* 4KB-sized summary block structure */
+/*
+ * Block-sized summary block structure
+ * Layout of f2fs_summary block is
+ * struct f2fs_summary entries[ENTRIES_IN_SUM];
+ * struct f2fs_journal journal;
+ * struct summary_footer footer;
+ *
+ * Do NOT use sizeof, use F2FS_BLKSIZE
+ *
+ */
 struct f2fs_summary_block {
-	struct f2fs_summary entries[ENTRIES_IN_SUM];
-	struct f2fs_journal journal;
-	struct summary_footer footer;
+	struct f2fs_summary entries[0];
 };
-
-static_assert(sizeof(struct f2fs_summary_block) == 4096, "");
+#define F2FS_SUMMARY_BLOCK_JOURNAL(blk) ((struct f2fs_journal *)(&(blk)->entries[ENTRIES_IN_SUM]))
+#define F2FS_SUMMARY_BLOCK_FOOTER(blk) ((struct summary_footer *)&((char *)\
+					(&(blk)->entries[0]))[F2FS_BLKSIZE - SUM_FOOTER_SIZE])
 
 /*
  * For directory operations
@@ -1289,8 +1336,8 @@ typedef __le32	f2fs_hash_t;
 #define GET_DENTRY_SLOTS(x)	((x + F2FS_SLOT_LEN - 1) >> F2FS_SLOT_LEN_BITS)
 
 /* the number of dentry in a block */
-#define NR_DENTRY_IN_BLOCK	214
-
+#define NR_DENTRY_IN_BLOCK  ((BITS_PER_BYTE * F2FS_BLKSIZE) / \
+				((SIZE_OF_DIR_ENTRY + F2FS_SLOT_LEN) * BITS_PER_BYTE + 1))
 /* MAX level for dir lookup */
 #define MAX_DIR_HASH_DEPTH	63
 
@@ -1315,16 +1362,29 @@ struct f2fs_dir_entry {
 
 static_assert(sizeof(struct f2fs_dir_entry) == 11, "");
 
-/* 4KB-sized directory entry block */
+/*
+ * Block-sized directory entry block
+ * On disk structure:
+ * struct f2fs_dentry_block;
+ * __u8 reserved[SIZE_OF_RESERVED];
+ * struct f2fs_dir_entry dentry[NR_DENTRY_IN_BLOCK];
+ * __u8 filename[NR_DENTRY_IN_BLOCK][F2FS_SLOT_LEN];
+ *
+ * Do NOT use sizeof. Use F2FS_BLKSIZE instead
+ */
 struct f2fs_dentry_block {
 	/* validity bitmap for directory entries in each block */
-	__u8 dentry_bitmap[SIZE_OF_DENTRY_BITMAP];
-	__u8 reserved[SIZE_OF_RESERVED];
-	struct f2fs_dir_entry dentry[NR_DENTRY_IN_BLOCK];
-	__u8 filename[NR_DENTRY_IN_BLOCK][F2FS_SLOT_LEN];
+	__u8 dentry_bitmap[0]; /* size is SIZE_OF_DENTRY_BITMAP, based on block size */
 };
 
-static_assert(sizeof(struct f2fs_dentry_block) == F2FS_BLKSIZE, "");
+#define F2FS_DENTRY_BLOCK_DENTRIES(blk) ((struct f2fs_dir_entry *)\
+			&((blk)->dentry_bitmap[SIZE_OF_DENTRY_BITMAP + SIZE_OF_RESERVED]))
+#define F2FS_DENTRY_BLOCK_DENTRY(blk, i) (F2FS_DENTRY_BLOCK_DENTRIES((blk))[(i)])
+
+#define F2FS_DENTRY_BLOCK_FILENAMES(blk) ((__u8(*)[F2FS_SLOT_LEN])&F2FS_DENTRY_BLOCK_DENTRY(blk,\
+							NR_DENTRY_IN_BLOCK))
+#define F2FS_DENTRY_BLOCK_FILENAME(blk, i) (&((__u8 *)&F2FS_DENTRY_BLOCK_DENTRY(blk,\
+							NR_DENTRY_IN_BLOCK))[(i) * F2FS_SLOT_LEN])
 
 /* for inline stuff */
 #define DEF_INLINE_RESERVED_SIZE	1
@@ -1447,6 +1507,8 @@ struct f2fs_configuration {
 	uint32_t lpf_ino;
 	uint32_t root_uid;
 	uint32_t root_gid;
+	uint32_t blksize;
+	uint32_t blksize_bits;
 
 	/* defragmentation parameters */
 	int defrag_shrink;
@@ -1471,16 +1533,19 @@ struct f2fs_configuration {
 	/* precomputed fs UUID checksum for seeding other checksums */
 	uint32_t chksum_seed;
 
-	/* cache parameters */
-	dev_cache_config_t cache_config;
-
 	/* compression support for sload.f2fs */
 	compress_config_t compress;
 
 	block_t curseg_offset[NR_CURSEG_TYPE];
-	struct f2fs_journal sit_jnl;
-	struct f2fs_journal nat_jnl;
 	struct f2fs_summary sum[NR_CURSEG_TYPE][MAX_CACHE_SUMS];
+	union {
+		struct f2fs_journal sit_jnl;
+		char sit_bytes[F2FS_MAX_BLKSIZE];
+	};
+	union {
+		struct f2fs_journal nat_jnl;
+		char nat_bytes[F2FS_MAX_BLKSIZE];
+	};
 };
 
 extern int utf8_to_utf16(char *, const char *, size_t, size_t);
@@ -1518,9 +1583,6 @@ extern int f2fs_init_sparse_file(void);
 extern void f2fs_release_sparse_resource(void);
 extern int f2fs_finalize_device(void);
 extern int f2fs_fsync_device(void);
-
-extern void dcache_init(void);
-extern void dcache_release(void);
 
 extern int dev_read(void *, __u64, size_t);
 #ifdef POSIX_FADV_WILLNEED
@@ -1764,9 +1826,9 @@ static inline void show_version(const char *prog)
 static inline void f2fs_init_inode(struct f2fs_super_block *sb,
 		struct f2fs_node *raw_node, nid_t ino, time_t mtime, mode_t mode)
 {
-	raw_node->footer.nid = cpu_to_le32(ino);
-	raw_node->footer.ino = cpu_to_le32(ino);
-	raw_node->footer.cp_ver = cpu_to_le64(1);
+	F2FS_NODE_FOOTER(raw_node)->nid = cpu_to_le32(ino);
+	F2FS_NODE_FOOTER(raw_node)->ino = cpu_to_le32(ino);
+	F2FS_NODE_FOOTER(raw_node)->cp_ver = cpu_to_le64(1);
 
 	raw_node->i.i_uid = cpu_to_le32(c.root_uid);
 	raw_node->i.i_gid = cpu_to_le32(c.root_gid);
@@ -1946,5 +2008,52 @@ extern int f2fs_str2encoding(const char *string);
 extern char *f2fs_encoding2str(const int encoding);
 extern int f2fs_get_encoding_flags(int encoding);
 extern int f2fs_str2encoding_flags(char **param, __u16 *flags);
+
+static inline void check_block_struct_sizes(void)
+{
+	/* Check Orphan Block Size */
+	assert(F2FS_ORPHANS_PER_BLOCK * sizeof(__le32)
+			+ sizeof(struct orphan_block_footer) == F2FS_BLKSIZE);
+
+	/* Check Inode Block Size */
+	assert(offsetof(struct f2fs_inode, i_extra_isize) + DEF_ADDRS_PER_INODE * sizeof(__le32)
+		+ sizeof(struct f2fs_inode_nids) + sizeof(struct node_footer) == F2FS_BLKSIZE);
+
+	/* Check Direct Block Size */
+	assert(DEF_ADDRS_PER_BLOCK * sizeof(__le32) + sizeof(struct node_footer) == F2FS_BLKSIZE);
+
+	/* Check Indirect Block Size */
+	assert(NIDS_PER_BLOCK * sizeof(__le32) + sizeof(struct node_footer) == F2FS_BLKSIZE);
+
+	/* Check NAT Block Size */
+	assert((NAT_ENTRY_PER_BLOCK + 1) * sizeof(struct f2fs_nat_entry) > F2FS_BLKSIZE);
+	assert(NAT_ENTRY_PER_BLOCK * sizeof(struct f2fs_nat_entry) <= F2FS_BLKSIZE);
+
+	/* Check SIT Block Size */
+	assert((SIT_ENTRY_PER_BLOCK + 1) * sizeof(struct f2fs_sit_entry) > F2FS_BLKSIZE);
+	assert(SIT_ENTRY_PER_BLOCK * sizeof(struct f2fs_sit_entry) <= F2FS_BLKSIZE);
+
+	/* Check NAT Journal Block Size */
+	assert(sizeof(struct f2fs_summary) * ENTRIES_IN_SUM
+			+ offsetof(struct f2fs_journal, nat_j)
+			+ NAT_JOURNAL_ENTRIES * sizeof(struct nat_journal_entry)
+			+ NAT_JOURNAL_RESERVED + sizeof(struct summary_footer) == F2FS_BLKSIZE);
+
+	/* Check SIT Journal Block Size */
+	assert(sizeof(struct f2fs_summary) * ENTRIES_IN_SUM
+			+ offsetof(struct f2fs_journal, sit_j)
+			+ SIT_JOURNAL_ENTRIES * sizeof(struct sit_journal_entry)
+			+ SIT_JOURNAL_RESERVED + sizeof(struct summary_footer) == F2FS_BLKSIZE);
+
+	/* Check Info Journal Block Size */
+	assert(sizeof(struct f2fs_summary) * ENTRIES_IN_SUM + sizeof(__le64)
+			+ offsetof(struct f2fs_journal, info)
+			+ EXTRA_INFO_RESERVED + sizeof(struct summary_footer) == F2FS_BLKSIZE);
+
+	/* Check Dentry Block Size */
+	assert(sizeof(__u8) * (SIZE_OF_DENTRY_BITMAP + SIZE_OF_RESERVED)
+			+ NR_DENTRY_IN_BLOCK * sizeof(struct f2fs_dir_entry)
+			+ NR_DENTRY_IN_BLOCK * F2FS_SLOT_LEN * sizeof(u8) == F2FS_BLKSIZE);
+}
 
 #endif	/*__F2FS_FS_H */
