@@ -198,6 +198,7 @@ struct f2fs_sm_info {
 	unsigned int main_segments;
 	unsigned int reserved_segments;
 	unsigned int ovp_segments;
+	unsigned int free_segments;
 };
 
 struct f2fs_dentry_ptr {
@@ -332,7 +333,7 @@ static inline void *inline_data_addr(struct f2fs_node *node_blk)
 
 static inline unsigned int ofs_of_node(struct f2fs_node *node_blk)
 {
-	unsigned flag = le32_to_cpu(node_blk->footer.flag);
+	unsigned flag = le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->flag);
 	return flag >> OFFSET_BIT_SHIFT;
 }
 
@@ -608,8 +609,8 @@ static inline int inline_xattr_size(struct f2fs_inode *inode)
 }
 
 extern int lookup_nat_in_journal(struct f2fs_sb_info *sbi, u32 nid, struct f2fs_nat_entry *ne);
-#define IS_SUM_NODE_SEG(footer)		(footer.entry_type == SUM_TYPE_NODE)
-#define IS_SUM_DATA_SEG(footer)		(footer.entry_type == SUM_TYPE_DATA)
+#define IS_SUM_NODE_SEG(sum)		(F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type == SUM_TYPE_NODE)
+#define IS_SUM_DATA_SEG(sum)		(F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type == SUM_TYPE_DATA)
 
 static inline unsigned int dir_buckets(unsigned int level, int dir_level)
 {

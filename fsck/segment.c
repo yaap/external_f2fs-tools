@@ -77,6 +77,8 @@ int reserve_new_block(struct f2fs_sb_info *sbi, block_t *to,
 	se = get_seg_entry(sbi, GET_SEGNO(sbi, blkaddr));
 	offset = OFFSET_IN_SEG(sbi, blkaddr);
 	se->type = type;
+	if (se->valid_blocks == 0)
+		SM_I(sbi)->free_segments--;
 	se->valid_blocks++;
 	f2fs_set_bit(offset, (char *)se->cur_valid_map);
 	if (need_fsync_data_record(sbi)) {
@@ -492,7 +494,7 @@ static void update_largest_extent(struct f2fs_sb_info *sbi, nid_t ino)
 	struct node_info ni;
 	struct f2fs_node *inode;
 	u32 blkaddr, prev_blkaddr, cur_blk = 0, end_blk;
-	struct extent_info largest_ext, cur_ext;
+	struct extent_info largest_ext = { 0, }, cur_ext = { 0, };
 	u64 remained_blkentries = 0;
 	u32 cluster_size;
 	int count;

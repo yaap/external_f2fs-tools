@@ -50,6 +50,7 @@ static void mkfs_usage()
 	MSG(0, "\nUsage: mkfs.f2fs [options] device [sectors]\n");
 	MSG(0, "[options]:\n");
 	MSG(0, "  -a heap-based allocation [default:0]\n");
+	MSG(0, "  -b filesystem block size [default:4096]\n");
 	MSG(0, "  -c device1[,device2,...] up to 7 additional devices, except meta device\n");
 	MSG(0, "  -d debug level [default:0]\n");
 	MSG(0, "  -e [cold file ext list] e.g. \"mp3,gif,mov\"\n");
@@ -139,7 +140,7 @@ static void add_default_options(void)
 		/* -d1 -f -w 4096 -R 0:0 */
 		c.dbg_lv = 1;
 		force_overwrite = 1;
-		c.wanted_sector_size = 4096;
+		c.wanted_sector_size = F2FS_BLKSIZE;
 		c.root_uid = c.root_gid = 0;
 
 		/* RO doesn't need any other features */
@@ -175,7 +176,7 @@ static void add_default_options(void)
 
 static void f2fs_parse_options(int argc, char *argv[])
 {
-	static const char *option_string = "qa:c:C:d:e:E:g:hil:mo:O:rR:s:S:z:t:T:U:Vfw:Z:";
+	static const char *option_string = "qa:b:c:C:d:e:E:g:hil:mo:O:rR:s:S:z:t:T:U:Vfw:Z:";
 	static const struct option long_opts[] = {
 		{ .name = "help", .has_arg = 0, .flag = NULL, .val = 'h' },
 		{ .name = NULL, .has_arg = 0, .flag = NULL, .val = 0 }
@@ -191,6 +192,15 @@ static void f2fs_parse_options(int argc, char *argv[])
 			break;
 		case 'a':
 			c.heap = atoi(optarg);
+			break;
+		case 'b':
+			c.blksize = atoi(optarg);
+			c.blksize_bits = log_base_2(c.blksize);
+			c.sectors_per_blk = DEFAULT_SECTORS_PER_BLOCK;
+			if ((1 << c.blksize_bits) != c.blksize) {
+				MSG(0, "Error: Block size must be power of 2");
+				mkfs_usage();
+			}
 			break;
 		case 'c':
 			if (c.ndevs >= MAX_DEVICES) {
@@ -355,6 +365,7 @@ static void f2fs_parse_options(int argc, char *argv[])
 
 	if (c.zoned_mode)
 		c.feature |= F2FS_FEATURE_BLKZONED;
+	check_block_struct_sizes();
 }
 
 #ifdef HAVE_LIBBLKID
