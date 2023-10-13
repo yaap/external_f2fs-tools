@@ -571,7 +571,7 @@ int f2fs_crc_valid(uint32_t blk_crc, void *buf, int len)
 __u32 f2fs_inode_chksum(struct f2fs_node *node)
 {
 	struct f2fs_inode *ri = &node->i;
-	__le32 ino = node->footer.ino;
+	__le32 ino = F2FS_NODE_FOOTER(node)->ino;
 	__le32 gen = ri->i_generation;
 	__u32 chksum, chksum_seed;
 	__u32 dummy_cs = 0;
@@ -686,6 +686,8 @@ void f2fs_init_configuration(void)
 
 	memset(&c, 0, sizeof(struct f2fs_configuration));
 	c.ndevs = 1;
+	c.blksize = 1 << DEFAULT_BLKSIZE_BITS;
+	c.blksize_bits = DEFAULT_BLKSIZE_BITS;
 	c.sectors_per_blk = DEFAULT_SECTORS_PER_BLOCK;
 	c.blks_per_seg = DEFAULT_BLOCKS_PER_SEGMENT;
 	c.wanted_total_sectors = -1;

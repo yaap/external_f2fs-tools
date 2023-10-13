@@ -126,10 +126,7 @@ struct f2fs_fsck {
 	struct quota_ctx *qctx;
 };
 
-#define BLOCK_SZ		4096
-struct block {
-	unsigned char buf[BLOCK_SZ];
-};
+#define BLOCK_SZ		F2FS_BLKSIZE
 
 enum NODE_TYPE {
 	TYPE_INODE = 37,
