@@ -370,7 +370,7 @@ void print_inode_info(struct f2fs_sb_info *sbi,
 	DISP_u32(F2FS_INODE_NIDS(inode), i_nid[3]);	/* indirect */
 	DISP_u32(F2FS_INODE_NIDS(inode), i_nid[4]);	/* double indirect */
 
-	xattr_addr = read_all_xattrs(sbi, node);
+	xattr_addr = read_all_xattrs(sbi, node, true);
 	if (!xattr_addr)
 		goto out;
 
@@ -716,6 +716,7 @@ static char *errors_str[] = {
 	[ERROR_CORRUPTED_VERITY_XATTR]		= "corrupted_verity_xattr",
 	[ERROR_CORRUPTED_XATTR]			= "corrupted_xattr",
 	[ERROR_INVALID_NODE_REFERENCE]		= "invalid_node_reference",
+	[ERROR_INCONSISTENT_NAT]		= "inconsistent_nat",
 };
 
 void print_sb_errors(struct f2fs_super_block *sb)
