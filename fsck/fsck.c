@@ -834,6 +834,61 @@ void fsck_reada_all_direct_node_blocks(struct f2fs_sb_info *sbi,
 	}
 }
 
+static bool is_zeroed(const u8 *p, size_t size)
+{
+	size_t i;
+
+	for (i = 0; i < size; i++) {
+		if (p[i])
+			return false;
+	}
+	return true;
+}
+
+int chk_extended_attributes(struct f2fs_sb_info *sbi, u32 nid,
+		struct f2fs_node *inode)
+{
+	void *xattr;
+	void *last_base_addr;
+	struct f2fs_xattr_entry *ent;
+	__u32 xattr_size = XATTR_SIZE(&inode->i);
+	bool need_fix = false;
+
+	if (xattr_size == 0)
+		return 0;
+
+	xattr = read_all_xattrs(sbi, inode, false);
+	ASSERT(xattr);
+
+	last_base_addr = (void *)xattr + xattr_size;
+
+	list_for_each_xattr(ent, xattr) {
+		if ((void *)(ent) + sizeof(__u32) > last_base_addr ||
+			(void *)XATTR_NEXT_ENTRY(ent) > last_base_addr) {
+			ASSERT_MSG("[0x%x] last xattr entry (offset: %lx) "
+					"crosses the boundary",
+					nid, (long int)((void *)ent - xattr));
+			need_fix = true;
+			break;
+		}
+	}
+	if (!need_fix &&
+	    !is_zeroed((u8 *)ent, (u8 *)last_base_addr - (u8 *)ent)) {
+		ASSERT_MSG("[0x%x] nonzero bytes in xattr space after "
+				"end of list", nid);
+		need_fix = true;
+	}
+	if (need_fix && c.fix_on) {
+		memset(ent, 0, (u8 *)last_base_addr - (u8 *)ent);
+		write_all_xattrs(sbi, inode, xattr_size, xattr);
+		FIX_MSG("[0x%x] nullify wrong xattr entries", nid);
+		free(xattr);
+		return 1;
+	}
+	free(xattr);
+	return 0;
+}
+
 /* start with valid nid and blkaddr */
 void fsck_chk_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 		enum FILE_TYPE ftype, struct f2fs_node *node_blk,
@@ -1007,6 +1062,9 @@ check_next:
 			need_fix = 1;
 		}
 	}
+
+	if (chk_extended_attributes(sbi, nid, node_blk))
+		need_fix = 1;
 
 	if ((node_blk->i.i_inline & F2FS_INLINE_DATA)) {
 		unsigned int inline_size = MAX_INLINE_DATA(node_blk);
