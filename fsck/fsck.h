@@ -126,8 +126,6 @@ struct f2fs_fsck {
 	struct quota_ctx *qctx;
 };
 
-#define BLOCK_SZ		F2FS_BLKSIZE
-
 enum NODE_TYPE {
 	TYPE_INODE = 37,
 	TYPE_DIRECT_NODE = 43,
@@ -207,8 +205,6 @@ extern void update_sum_entry(struct f2fs_sb_info *, block_t,
 				struct f2fs_summary *);
 extern void get_node_info(struct f2fs_sb_info *, nid_t, struct node_info *);
 extern void nullify_nat_entry(struct f2fs_sb_info *, u32);
-extern void update_nat_journal_blkaddr(struct f2fs_sb_info *sbi, u32 nid,
-					block_t blkaddr);
 extern void rewrite_sit_area_bitmap(struct f2fs_sb_info *);
 extern void build_nat_area_bitmap(struct f2fs_sb_info *);
 extern void build_sit_area_bitmap(struct f2fs_sb_info *);
