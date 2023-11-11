@@ -30,7 +30,7 @@ void *read_all_xattrs(struct f2fs_sb_info *sbi, struct f2fs_node *inode,
 			return NULL;
 	}
 
-	txattr_addr = calloc(inline_size + BLOCK_SZ, 1);
+	txattr_addr = calloc(inline_size + F2FS_BLKSIZE, 1);
 	ASSERT(txattr_addr);
 
 	if (inline_size)
@@ -44,6 +44,9 @@ void *read_all_xattrs(struct f2fs_sb_info *sbi, struct f2fs_node *inode,
 		get_node_info(sbi, xnid, &ni);
 		ret = dev_read_block(txattr_addr + inline_size, ni.blk_addr);
 		ASSERT(ret >= 0);
+		memset(txattr_addr + inline_size + F2FS_BLKSIZE -
+				sizeof(struct node_footer), 0,
+				sizeof(struct node_footer));
 	}
 
 	header = XATTR_HDR(txattr_addr);
@@ -110,7 +113,7 @@ void write_all_xattrs(struct f2fs_sb_info *sbi,
 		set_new_dnode(&dn, inode, NULL, xnid);
 		get_node_info(sbi, xnid, &ni);
 		blkaddr = ni.blk_addr;
-		xattr_node = calloc(BLOCK_SZ, 1);
+		xattr_node = calloc(F2FS_BLKSIZE, 1);
 		ASSERT(xattr_node);
 		ret = dev_read_block(xattr_node, ni.blk_addr);
 		if (ret < 0)
@@ -161,7 +164,7 @@ int f2fs_setxattr(struct f2fs_sb_info *sbi, nid_t ino, int index, const char *na
 	ASSERT(index == F2FS_XATTR_INDEX_SECURITY);
 
 	get_node_info(sbi, ino, &ni);
-	inode = calloc(BLOCK_SZ, 1);
+	inode = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(inode);
 	ret = dev_read_block(inode, ni.blk_addr);
 	ASSERT(ret >= 0);
