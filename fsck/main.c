@@ -263,7 +263,7 @@ void f2fs_parse_options(int argc, char *argv[])
 				break;
 			case 'a':
 				c.auto_fix = 1;
-				MSG(0, "Info: Fix the reported corruption.\n");
+				MSG(0, "Info: Automatic fix mode enabled.\n");
 				break;
 			case 'c':
 				c.cache_config.num_cache_entry = atoi(optarg);
@@ -367,7 +367,7 @@ void f2fs_parse_options(int argc, char *argv[])
 					MSG(0, "\tError: Unknown flag %s\n", token);
 					fsck_usage();
 				}
-				c.feature |= cpu_to_le32(F2FS_FEATURE_CASEFOLD);
+				c.feature |= F2FS_FEATURE_CASEFOLD;
 				break;
 			case 'V':
 				show_version(prog);
@@ -803,6 +803,7 @@ void f2fs_parse_options(int argc, char *argv[])
 			return;
 	}
 
+	check_block_struct_sizes();
 	/* print out error */
 	switch (err) {
 	case EWRONG_OPT:
@@ -877,7 +878,7 @@ static int do_fsck(struct f2fs_sb_info *sbi)
 	cbc.cnt = 0;
 	cbc.cheader_pgofs = CHEADER_PGOFS_NONE;
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_QUOTA_INO)) {
+	if (c.feature & F2FS_FEATURE_QUOTA_INO) {
 		ret = quota_init_context(sbi);
 		if (ret) {
 			ASSERT_MSG("quota_init_context failure: %d", ret);
@@ -885,6 +886,10 @@ static int do_fsck(struct f2fs_sb_info *sbi)
 		}
 	}
 	fsck_chk_orphan_node(sbi);
+
+	if (fsck_sanity_check_nat(sbi, sbi->root_ino_num))
+		fsck_chk_root_inode(sbi);
+
 	fsck_chk_node_blk(sbi, NULL, sbi->root_ino_num,
 			F2FS_FT_DIR, TYPE_INODE, &blk_cnt, &cbc, NULL);
 	fsck_chk_quota_files(sbi);
@@ -935,7 +940,7 @@ static int do_defrag(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 
-	if (get_sb(feature) & cpu_to_le32(F2FS_FEATURE_RO)) {
+	if (get_sb(feature) & F2FS_FEATURE_RO) {
 		MSG(0, "Not support on readonly image.\n");
 		return -1;
 	}
@@ -1051,7 +1056,7 @@ static int do_label(struct f2fs_sb_info *sbi)
 	if (!c.vol_label) {
 		char label[MAX_VOLUME_NAME];
 
-		utf16_to_utf8(label, sb->volume_name,
+		utf16_to_utf8(label, (const char *)sb->volume_name,
 			      MAX_VOLUME_NAME, MAX_VOLUME_NAME);
 		MSG(0, "Info: volume label = %s\n", label);
 		return 0;
@@ -1062,7 +1067,7 @@ static int do_label(struct f2fs_sb_info *sbi)
 		return -1;
 	}
 
-	utf8_to_utf16(sb->volume_name, (const char *)c.vol_label,
+	utf8_to_utf16((char *)sb->volume_name, (const char *)c.vol_label,
 		      MAX_VOLUME_NAME, strlen(c.vol_label));
 
 	update_superblock(sb, SB_MASK_ALL);

@@ -108,6 +108,7 @@ enum {
 	META_SSA,
 	META_MAX,
 	META_POR,
+	DATA_GENERIC,
 };
 
 #define MAX_RA_BLOCKS	64
@@ -197,6 +198,7 @@ struct f2fs_sm_info {
 	unsigned int main_segments;
 	unsigned int reserved_segments;
 	unsigned int ovp_segments;
+	unsigned int free_segments;
 };
 
 struct f2fs_dentry_ptr {
@@ -331,7 +333,7 @@ static inline void *inline_data_addr(struct f2fs_node *node_blk)
 
 static inline unsigned int ofs_of_node(struct f2fs_node *node_blk)
 {
-	unsigned flag = le32_to_cpu(node_blk->footer.flag);
+	unsigned flag = le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->flag);
 	return flag >> OFFSET_BIT_SHIFT;
 }
 
@@ -520,20 +522,6 @@ static inline bool IS_VALID_NID(struct f2fs_sb_info *sbi, u32 nid)
 			<< (sbi->log_blocks_per_seg - 1)));
 }
 
-static inline bool IS_VALID_BLK_ADDR(struct f2fs_sb_info *sbi, u32 addr)
-{
-	if (addr == NULL_ADDR || addr == NEW_ADDR)
-		return 1;
-
-	if (addr >= le64_to_cpu(F2FS_RAW_SUPER(sbi)->block_count) ||
-				addr < SM_I(sbi)->main_blkaddr) {
-		DBG(1, "block addr [0x%x]\n", addr);
-		return 0;
-	}
-	/* next block offset will be checked at the end of fsck. */
-	return 1;
-}
-
 static inline bool is_valid_data_blkaddr(block_t blkaddr)
 {
 	if (blkaddr == NEW_ADDR || blkaddr == NULL_ADDR ||
@@ -621,8 +609,8 @@ static inline int inline_xattr_size(struct f2fs_inode *inode)
 }
 
 extern int lookup_nat_in_journal(struct f2fs_sb_info *sbi, u32 nid, struct f2fs_nat_entry *ne);
-#define IS_SUM_NODE_SEG(footer)		(footer.entry_type == SUM_TYPE_NODE)
-#define IS_SUM_DATA_SEG(footer)		(footer.entry_type == SUM_TYPE_DATA)
+#define IS_SUM_NODE_SEG(sum)		(F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type == SUM_TYPE_NODE)
+#define IS_SUM_DATA_SEG(sum)		(F2FS_SUMMARY_BLOCK_FOOTER(sum)->entry_type == SUM_TYPE_DATA)
 
 static inline unsigned int dir_buckets(unsigned int level, int dir_level)
 {

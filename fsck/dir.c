@@ -43,8 +43,8 @@ void make_dentry_ptr(struct f2fs_dentry_ptr *d, struct f2fs_node *node_blk,
 		d->max = NR_DENTRY_IN_BLOCK;
 		d->nr_bitmap = SIZE_OF_DENTRY_BITMAP;
 		d->bitmap = t->dentry_bitmap;
-		d->dentry = t->dentry;
-		d->filename = t->filename;
+		d->dentry = F2FS_DENTRY_BLOCK_DENTRIES(t);
+		d->filename = F2FS_DENTRY_BLOCK_FILENAMES(t);
 	} else {
 		int entry_cnt = NR_INLINE_DENTRY(node_blk);
 		int bitmap_size = INLINE_DENTRY_BITMAP_SIZE(node_blk);
@@ -116,7 +116,7 @@ static int find_in_level(struct f2fs_sb_info *sbi, struct f2fs_node *dir,
 	struct dnode_of_data dn;
 	void *dentry_blk;
 	int max_slots = 214;
-	nid_t ino = le32_to_cpu(dir->footer.ino);
+	nid_t ino = le32_to_cpu(F2FS_NODE_FOOTER(dir)->ino);
 	f2fs_hash_t namehash;
 	unsigned int dir_level = dir->i.i_dir_level;
 	int ret = 0;
@@ -130,7 +130,7 @@ static int find_in_level(struct f2fs_sb_info *sbi, struct f2fs_node *dir,
 	bidx = dir_block_index(level, dir_level, le32_to_cpu(namehash) % nbucket);
 	end_block = bidx + nblock;
 
-	dentry_blk = calloc(BLOCK_SZ, 1);
+	dentry_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(dentry_blk);
 
 	memset(&dn, 0, sizeof(dn));
@@ -225,25 +225,29 @@ int f2fs_add_link(struct f2fs_sb_info *sbi, struct f2fs_node *parent,
 	int level = 0, current_depth, bit_pos;
 	int nbucket, nblock, bidx, block;
 	int slots = GET_DENTRY_SLOTS(name_len);
-	f2fs_hash_t dentry_hash = f2fs_dentry_hash(get_encoding(sbi),
-						IS_CASEFOLDED(&parent->i),
-						name, name_len);
+	f2fs_hash_t dentry_hash;
 	struct f2fs_dentry_block *dentry_blk;
 	struct f2fs_dentry_ptr d;
 	struct dnode_of_data dn;
-	nid_t pino = le32_to_cpu(parent->footer.ino);
-	unsigned int dir_level = parent->i.i_dir_level;
+	nid_t pino;
+	unsigned int dir_level;
 	int ret;
 
 	if (parent == NULL)
 		return -EINVAL;
+
+	dentry_hash = f2fs_dentry_hash(get_encoding(sbi),
+						IS_CASEFOLDED(&parent->i),
+						name, name_len);
+	pino = le32_to_cpu(F2FS_NODE_FOOTER(parent)->ino);
+	dir_level = parent->i.i_dir_level;
 
 	if (!pino) {
 		ERR_MSG("Wrong parent ino:%d \n", pino);
 		return -EINVAL;
 	}
 
-	dentry_blk = calloc(BLOCK_SZ, 1);
+	dentry_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(dentry_blk);
 
 	current_depth = le32_to_cpu(parent->i.i_current_depth);
@@ -336,7 +340,7 @@ add_dentry:
 static void make_empty_dir(struct f2fs_sb_info *sbi, struct f2fs_node *inode)
 {
 	struct f2fs_dentry_block *dent_blk;
-	nid_t ino = le32_to_cpu(inode->footer.ino);
+	nid_t ino = le32_to_cpu(F2FS_NODE_FOOTER(inode)->ino);
 	nid_t pino = le32_to_cpu(inode->i.i_pino);
 	struct f2fs_summary sum;
 	struct node_info ni;
@@ -345,20 +349,20 @@ static void make_empty_dir(struct f2fs_sb_info *sbi, struct f2fs_node *inode)
 
 	get_node_info(sbi, ino, &ni);
 
-	dent_blk = calloc(BLOCK_SZ, 1);
+	dent_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(dent_blk);
 
-	dent_blk->dentry[0].hash_code = 0;
-	dent_blk->dentry[0].ino = cpu_to_le32(ino);
-	dent_blk->dentry[0].name_len = cpu_to_le16(1);
-	dent_blk->dentry[0].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[0], ".", 1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).ino = cpu_to_le32(ino);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).name_len = cpu_to_le16(1);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 0).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 0), ".", 1);
 
-	dent_blk->dentry[1].hash_code = 0;
-	dent_blk->dentry[1].ino = cpu_to_le32(pino);
-	dent_blk->dentry[1].name_len = cpu_to_le16(2);
-	dent_blk->dentry[1].file_type = F2FS_FT_DIR;
-	memcpy(dent_blk->filename[1], "..", 2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).hash_code = 0;
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).ino = cpu_to_le32(pino);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).name_len = cpu_to_le16(2);
+	F2FS_DENTRY_BLOCK_DENTRY(dent_blk, 1).file_type = F2FS_FT_DIR;
+	memcpy(F2FS_DENTRY_BLOCK_FILENAME(dent_blk, 1), "..", 2);
 
 	test_and_set_bit_le(0, dent_blk->dentry_bitmap);
 	test_and_set_bit_le(1, dent_blk->dentry_bitmap);
@@ -377,7 +381,7 @@ static void make_empty_dir(struct f2fs_sb_info *sbi, struct f2fs_node *inode)
 static void page_symlink(struct f2fs_sb_info *sbi, struct f2fs_node *inode,
 					const char *symname, int symlen)
 {
-	nid_t ino = le32_to_cpu(inode->footer.ino);
+	nid_t ino = le32_to_cpu(F2FS_NODE_FOOTER(inode)->ino);
 	struct f2fs_summary sum;
 	struct node_info ni;
 	char *data_blk;
@@ -394,7 +398,7 @@ static void page_symlink(struct f2fs_sb_info *sbi, struct f2fs_node *inode,
 		return;
 	}
 
-	data_blk = calloc(BLOCK_SZ, 1);
+	data_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(data_blk);
 
 	memcpy(data_blk, symname, symlen);
@@ -470,7 +474,7 @@ static void init_inode_block(struct f2fs_sb_info *sbi,
 
 	if (de->file_type == F2FS_FT_DIR) {
 		mode |= S_IFDIR;
-		size = 4096;
+		size = F2FS_BLKSIZE;
 		links++;
 		blocks++;
 	} else if (de->file_type == F2FS_FT_REG_FILE) {
@@ -520,17 +524,17 @@ static void init_inode_block(struct f2fs_sb_info *sbi,
 	memcpy(node_blk->i.i_name, de->name, de->len);
 	node_blk->i.i_name[de->len] = 0;
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_EXTRA_ATTR)) {
+	if (c.feature & F2FS_FEATURE_EXTRA_ATTR) {
 		node_blk->i.i_inline |= F2FS_EXTRA_ATTR;
 		node_blk->i.i_extra_isize = cpu_to_le16(calc_extra_isize());
 	}
 
 	set_file_temperature(sbi, node_blk, de->name);
 
-	node_blk->footer.ino = cpu_to_le32(de->ino);
-	node_blk->footer.nid = cpu_to_le32(de->ino);
-	node_blk->footer.flag = 0;
-	node_blk->footer.cp_ver = ckpt->checkpoint_ver;
+	F2FS_NODE_FOOTER(node_blk)->ino = cpu_to_le32(de->ino);
+	F2FS_NODE_FOOTER(node_blk)->nid = cpu_to_le32(de->ino);
+	F2FS_NODE_FOOTER(node_blk)->flag = 0;
+	F2FS_NODE_FOOTER(node_blk)->cp_ver = ckpt->checkpoint_ver;
 	set_cold_node(node_blk, S_ISDIR(mode));
 
 	if (S_ISDIR(mode)) {
@@ -542,7 +546,7 @@ static void init_inode_block(struct f2fs_sb_info *sbi,
 		de->link = NULL;
 	}
 
-	if (c.feature & cpu_to_le32(F2FS_FEATURE_INODE_CHKSUM))
+	if (c.feature & F2FS_FEATURE_INODE_CHKSUM)
 		node_blk->i.i_inode_checksum =
 			cpu_to_le32(f2fs_inode_chksum(node_blk));
 }
@@ -552,7 +556,7 @@ int convert_inline_dentry(struct f2fs_sb_info *sbi, struct f2fs_node *node,
 {
 	struct f2fs_inode *inode = &(node->i);
 	unsigned int dir_level = node->i.i_dir_level;
-	nid_t ino = le32_to_cpu(node->footer.ino);
+	nid_t ino = le32_to_cpu(F2FS_NODE_FOOTER(node)->ino);
 	char inline_data[MAX_INLINE_DATA(node)];
 	struct dnode_of_data dn;
 	struct f2fs_dentry_ptr d;
@@ -574,7 +578,7 @@ int convert_inline_dentry(struct f2fs_sb_info *sbi, struct f2fs_node *node,
 		struct f2fs_dentry_block *dentry_blk;
 		struct f2fs_dentry_ptr src, dst;
 
-		dentry_blk = calloc(BLOCK_SZ, 1);
+		dentry_blk = calloc(F2FS_BLKSIZE, 1);
 		ASSERT(dentry_blk);
 
 		set_new_dnode(&dn, node, NULL, ino);
@@ -694,7 +698,7 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 	if (de->from_devino)
 		found_hardlink = f2fs_search_hardlink(sbi, de);
 
-	parent = calloc(BLOCK_SZ, 1);
+	parent = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(parent);
 
 	ret = dev_read_block(parent, ni.blk_addr);
@@ -704,7 +708,8 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 	ret = convert_inline_dentry(sbi, parent, ni.blk_addr);
 	if (ret) {
 		MSG(0, "Convert inline dentry for pino=%x failed.\n", de->pino);
-		return -1;
+		ret = -1;
+		goto free_parent_dir;
 	}
 
 	ret = f2fs_find_entry(sbi, parent, de);
@@ -713,10 +718,11 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 					de->name, de->pino, ret);
 		if (de->file_type == F2FS_FT_REG_FILE)
 			de->ino = 0;
+		ret = 0;
 		goto free_parent_dir;
 	}
 
-	child = calloc(BLOCK_SZ, 1);
+	child = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(child);
 
 	if (found_hardlink && found_hardlink->to_ino) {
@@ -728,7 +734,8 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 		if (hardlink_ni.blk_addr == NULL_ADDR) {
 			MSG(1, "No original inode for hard link to_ino=%x\n",
 				found_hardlink->to_ino);
-			return -1;
+			ret = -1;
+			goto free_child_dir;
 		}
 
 		/* Use previously-recorded inode */
@@ -744,12 +751,13 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 
 	ret = f2fs_add_link(sbi, parent, child->i.i_name,
 				le32_to_cpu(child->i.i_namelen),
-				le32_to_cpu(child->footer.ino),
+				le32_to_cpu(F2FS_NODE_FOOTER(child)->ino),
 				map_de_type(le16_to_cpu(child->i.i_mode)),
 				ni.blk_addr, 1);
 	if (ret) {
 		MSG(0, "Skip the existing \"%s\" pino=%x ERR=%d\n",
 					de->name, de->pino, ret);
+		ret = 0;
 		goto free_child_dir;
 	}
 
@@ -762,7 +770,7 @@ int f2fs_create(struct f2fs_sb_info *sbi, struct dentry *de)
 			/* Replace child with original block */
 			free(child);
 
-			child = calloc(BLOCK_SZ, 1);
+			child = calloc(F2FS_BLKSIZE, 1);
 			ASSERT(child);
 
 			ret = dev_read_block(child, blkaddr);
@@ -804,7 +812,7 @@ free_child_dir:
 	free(child);
 free_parent_dir:
 	free(parent);
-	return 0;
+	return ret;
 }
 
 int f2fs_mkdir(struct f2fs_sb_info *sbi, struct dentry *de)
@@ -830,7 +838,7 @@ int f2fs_find_path(struct f2fs_sb_info *sbi, char *path, nid_t *ino)
 		return -ENOENT;
 
 	*ino = F2FS_ROOT_INO(sbi);
-	parent = calloc(BLOCK_SZ, 1);
+	parent = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(parent);
 
 	p = strtok(path, "/");

@@ -57,11 +57,16 @@ int f2fs_rebuild_qf_inode(struct f2fs_sb_info *sbi, int qtype)
 		MSG(1, "\tError: Calloc Failed for raw_node!!!\n");
 		return -ENOMEM;
 	}
-	f2fs_init_qf_inode(sb, raw_node, qtype, time(NULL));
+	f2fs_init_inode(sb, raw_node,
+			le32_to_cpu(sb->qf_ino[qtype]), time(NULL), 0x8180);
+
+	raw_node->i.i_size = cpu_to_le64(1024 * 6);
+	raw_node->i.i_blocks = cpu_to_le64(1);
+	raw_node->i.i_flags = F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
 
 	if (is_set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG))
 		cp_ver |= (cur_cp_crc(ckpt) << 32);
-	raw_node->footer.cp_ver = cpu_to_le64(cp_ver);
+	F2FS_NODE_FOOTER(raw_node)->cp_ver = cpu_to_le64(cp_ver);
 
 	get_node_info(sbi, ino, &ni);
 	set_summary(&sum, ino, 0, ni.version);
@@ -120,13 +125,13 @@ block_t new_node_block(struct f2fs_sb_info *sbi,
 
 	f2fs_inode = dn->inode_blk;
 
-	node_blk = calloc(BLOCK_SZ, 1);
+	node_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk);
 
-	node_blk->footer.nid = cpu_to_le32(dn->nid);
-	node_blk->footer.ino = f2fs_inode->footer.ino;
-	node_blk->footer.flag = cpu_to_le32(ofs << OFFSET_BIT_SHIFT);
-	node_blk->footer.cp_ver = ckpt->checkpoint_ver;
+	F2FS_NODE_FOOTER(node_blk)->nid = cpu_to_le32(dn->nid);
+	F2FS_NODE_FOOTER(node_blk)->ino = F2FS_NODE_FOOTER(f2fs_inode)->ino;
+	F2FS_NODE_FOOTER(node_blk)->flag = cpu_to_le32(ofs << OFFSET_BIT_SHIFT);
+	F2FS_NODE_FOOTER(node_blk)->cp_ver = ckpt->checkpoint_ver;
 	set_cold_node(node_blk, S_ISDIR(le16_to_cpu(f2fs_inode->i.i_mode)));
 
 	type = CURSEG_COLD_NODE;
@@ -137,7 +142,7 @@ block_t new_node_block(struct f2fs_sb_info *sbi,
 			type = CURSEG_WARM_NODE;
 	}
 
-	if ((get_sb(feature) & cpu_to_le32(F2FS_FEATURE_RO)) &&
+	if ((get_sb(feature) & F2FS_FEATURE_RO) &&
 					type != CURSEG_HOT_NODE)
 		type = CURSEG_HOT_NODE;
 
@@ -150,7 +155,7 @@ block_t new_node_block(struct f2fs_sb_info *sbi,
 	}
 
 	/* update nat info */
-	update_nat_blkaddr(sbi, le32_to_cpu(f2fs_inode->footer.ino),
+	update_nat_blkaddr(sbi, le32_to_cpu(F2FS_NODE_FOOTER(f2fs_inode)->ino),
 						dn->nid, blkaddr);
 
 	dn->node_blk = node_blk;
@@ -285,7 +290,7 @@ int get_dnode_of_data(struct f2fs_sb_info *sbi, struct dnode_of_data *dn,
 			struct node_info ni;
 
 			get_node_info(sbi, nids[i], &ni);
-			dn->node_blk = calloc(BLOCK_SZ, 1);
+			dn->node_blk = calloc(F2FS_BLKSIZE, 1);
 			ASSERT(dn->node_blk);
 
 			ret = dev_read_block(dn->node_blk, ni.blk_addr);

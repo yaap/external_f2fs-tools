@@ -126,11 +126,6 @@ struct f2fs_fsck {
 	struct quota_ctx *qctx;
 };
 
-#define BLOCK_SZ		4096
-struct block {
-	unsigned char buf[BLOCK_SZ];
-};
-
 enum NODE_TYPE {
 	TYPE_INODE = 37,
 	TYPE_DIRECT_NODE = 43,
@@ -166,11 +161,12 @@ extern int fsck_chk_orphan_node(struct f2fs_sb_info *);
 extern int fsck_chk_quota_node(struct f2fs_sb_info *);
 extern int fsck_chk_quota_files(struct f2fs_sb_info *);
 extern int fsck_sanity_check_nid(struct f2fs_sb_info *, u32,
-			struct f2fs_node *, enum FILE_TYPE, enum NODE_TYPE,
-			struct node_info *);
+					enum FILE_TYPE, enum NODE_TYPE);
+extern int fsck_sanity_check_nat(struct f2fs_sb_info *sbi, u32 nid);
 extern int fsck_chk_node_blk(struct f2fs_sb_info *, struct f2fs_inode *, u32,
 		enum FILE_TYPE, enum NODE_TYPE, u32 *,
 		struct f2fs_compr_blk_cnt *, struct child_info *);
+extern int fsck_chk_root_inode(struct f2fs_sb_info *);
 extern void fsck_chk_inode_blk(struct f2fs_sb_info *, u32, enum FILE_TYPE,
 		struct f2fs_node *, u32 *, struct f2fs_compr_blk_cnt *,
 		struct node_info *, struct child_info *);
@@ -217,6 +213,8 @@ extern int f2fs_set_sit_bitmap(struct f2fs_sb_info *, u32);
 extern void fsck_init(struct f2fs_sb_info *);
 extern int fsck_verify(struct f2fs_sb_info *);
 extern void fsck_free(struct f2fs_sb_info *);
+extern bool f2fs_is_valid_blkaddr(struct f2fs_sb_info *sbi,
+					block_t blkaddr, int type);
 extern int f2fs_ra_meta_pages(struct f2fs_sb_info *, block_t, int, int);
 extern int f2fs_do_mount(struct f2fs_sb_info *);
 extern void f2fs_do_umount(struct f2fs_sb_info *);

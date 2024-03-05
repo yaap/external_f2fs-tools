@@ -9,12 +9,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#ifndef _LARGEFILE_SOURCE
-#define _LARGEFILE_SOURCE
-#endif
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_SOURCE
-#endif
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
 #endif
@@ -41,6 +35,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/xattr.h>
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -330,6 +325,42 @@ static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define clearflags_desc "clearflags ioctl"
+#define clearflags_help						\
+"f2fs_io clearflags [flag] [file]\n\n"				\
+"clear a flag given the file\n"					\
+"flag can be\n"							\
+"  compression\n"						\
+"  nocompression\n"						\
+
+static void do_clearflags(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	long flag = 0;
+	int ret, fd;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[2], O_RDONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_GETFLAGS, &flag);
+	printf("get a flag on %s ret=%d, flags=%lx\n", argv[1], ret, flag);
+	if (ret)
+		die_errno("F2FS_IOC_GETFLAGS failed");
+
+	if (!strcmp(argv[1], "compression"))
+		flag &= ~FS_COMPR_FL;
+	else if (!strcmp(argv[1], "nocompression"))
+		flag &= ~FS_NOCOMP_FL;
+
+	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
+	printf("clear a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
+	exit(0);
+}
+
 #define shutdown_desc "shutdown filesystem"
 #define shutdown_help					\
 "f2fs_io shutdown [level] [dir]\n\n"			\
@@ -365,6 +396,47 @@ static void do_shutdown(int argc, char **argv, const struct cmd_desc *cmd)
 		die_errno("F2FS_IOC_SHUTDOWN failed");
 
 	printf("Shutdown %s with level=%d\n", argv[2], flag);
+	exit(0);
+}
+
+#define fadvise_desc "fadvise"
+#define fadvise_help						\
+"f2fs_io fadvise [advice] [offset] [length] [file]\n\n"		\
+"fadvice given the file\n"					\
+"advice can be\n"						\
+" willneed\n"							\
+" sequential\n"							\
+
+static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd, advice;
+	off_t offset, length;
+
+	if (argc != 5) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[4], O_RDWR, 0);
+
+	if (!strcmp(argv[1], "willneed")) {
+		advice = POSIX_FADV_WILLNEED;
+	} else if (!strcmp(argv[1], "sequential")) {
+		advice = POSIX_FADV_SEQUENTIAL;
+	} else {
+		fputs("Wrong advice\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	offset = atoi(argv[2]);
+	length = atoll(argv[3]);
+
+	if (posix_fadvise(fd, offset, length, advice) != 0)
+		die_errno("fadvise failed");
+
+	printf("fadvice %s to a file: %s\n", argv[1], argv[4]);
 	exit(0);
 }
 
@@ -413,9 +485,13 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define fallocate_desc "fallocate"
 #define fallocate_help						\
-"f2fs_io fallocate [keep_size] [offset] [length] [file]\n\n"	\
+"f2fs_io fallocate [-c] [-i] [-p] [-z] [keep_size] [offset] [length] [file]\n\n"	\
 "fallocate given the file\n"					\
 " [keep_size] : 1 or 0\n"					\
+" -c : collapse range\n"					\
+" -i : insert range\n"						\
+" -p : punch hole\n"						\
+" -z : zero range\n"						\
 
 static void do_fallocate(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -423,20 +499,43 @@ static void do_fallocate(int argc, char **argv, const struct cmd_desc *cmd)
 	off_t offset, length;
 	struct stat sb;
 	int mode = 0;
+	int c;
 
-	if (argc != 5) {
+	while ((c = getopt(argc, argv, "cipz")) != -1) {
+		switch (c) {
+		case 'c':
+			mode |= FALLOC_FL_COLLAPSE_RANGE;
+			break;
+		case 'i':
+			mode |= FALLOC_FL_INSERT_RANGE;
+			break;
+		case 'p':
+			mode |= FALLOC_FL_PUNCH_HOLE;
+			break;
+		case 'z':
+			mode |= FALLOC_FL_ZERO_RANGE;
+			break;
+		default:
+			fputs(cmd->cmd_help, stderr);
+			exit(2);
+		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc != 4) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
 	}
 
-	if (!strcmp(argv[1], "1"))
+	if (!strcmp(argv[0], "1"))
 		mode |= FALLOC_FL_KEEP_SIZE;
 
-	offset = atoi(argv[2]);
-	length = atoll(argv[3]);
+	offset = atoi(argv[1]);
+	length = atoll(argv[2]);
 
-	fd = xopen(argv[4], O_RDWR, 0);
+	fd = xopen(argv[3], O_RDWR, 0);
 
 	if (fallocate(fd, mode, offset, length) != 0)
 		die_errno("fallocate failed");
@@ -657,6 +756,7 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	char *data;
 	char *print_buf = NULL;
 	unsigned bs, count, i, print_bytes;
+	u64 total_time = 0;
 	int flags = 0;
 	int do_mmap = 0;
 	int fd;
@@ -692,28 +792,29 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 
 	fd = xopen(argv[6], O_RDONLY | flags, 0);
 
+	total_time = get_current_us();
 	if (do_mmap) {
 		data = mmap(NULL, count * buf_size, PROT_READ,
-						MAP_SHARED, fd, offset);
+						MAP_SHARED | MAP_POPULATE, fd, offset);
 		if (data == MAP_FAILED)
 			die("Mmap failed");
 	}
-
-	for (i = 0; i < count; i++) {
-		if (do_mmap) {
-			memcpy(buf, data + offset + buf_size * i, buf_size);
-			ret = buf_size;
-		} else {
+	if (!do_mmap) {
+		for (i = 0; i < count; i++) {
 			ret = pread(fd, buf, buf_size, offset + buf_size * i);
-		}
-		if (ret != buf_size)
-			break;
+			if (ret != buf_size)
+				break;
 
-		read_cnt += ret;
-		if (i == 0)
-			memcpy(print_buf, buf, print_bytes);
+			read_cnt += ret;
+			if (i == 0)
+				memcpy(print_buf, buf, print_bytes);
+		}
+	} else {
+		read_cnt = count * buf_size;
+		memcpy(print_buf, data, print_bytes);
 	}
-	printf("Read %"PRIu64" bytes and print %u bytes:\n", read_cnt, print_bytes);
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, print %u bytes:\n",
+		read_cnt, get_current_us() - total_time, print_bytes);
 	printf("%08"PRIx64" : ", offset);
 	for (i = 1; i <= print_bytes; i++) {
 		printf("%02x", print_buf[i - 1]);
@@ -809,8 +910,8 @@ static void do_fiemap(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 
 	memset(fm, 0, sizeof(struct fiemap));
-	start = atoi(argv[1]) * F2FS_BLKSIZE;
-	length = atoi(argv[2]) * F2FS_BLKSIZE;
+	start = (u64)atoi(argv[1]) * F2FS_BLKSIZE;
+	length = (u64)atoi(argv[2]) * F2FS_BLKSIZE;
 	fm->fm_start = start;
 	fm->fm_length = length;
 
@@ -1311,6 +1412,224 @@ static void do_gc(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define checkpoint_desc "trigger filesystem checkpoint"
+#define checkpoint_help "f2fs_io checkpoint [file_path]\n\n"
+
+static void do_checkpoint(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_WRONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_WRITE_CHECKPOINT);
+	if (ret < 0)
+		die_errno("F2FS_IOC_WRITE_CHECKPOINT failed");
+
+	printf("trigger filesystem checkpoint ret=%d\n", ret);
+	exit(0);
+}
+
+#define precache_extents_desc "trigger precache extents"
+#define precache_extents_help "f2fs_io precache_extents [file_path]\n\n"
+
+static void do_precache_extents(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_WRONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_PRECACHE_EXTENTS);
+	if (ret < 0)
+		die_errno("F2FS_IOC_PRECACHE_EXTENTS failed");
+
+	printf("trigger precache extents ret=%d\n", ret);
+	exit(0);
+}
+
+#define move_range_desc "moving a range of data blocks from source file to destination file"
+#define move_range_help						\
+"f2fs_io move_range [src_path] [dst_path] [src_start] [dst_start] "	\
+"[length]\n\n"								\
+"  src_path  : path to source file\n"					\
+"  dst_path  : path to destination file\n"				\
+"  src_start : start offset of src file move region, unit: bytes\n"	\
+"  dst_start : start offset of dst file move region, unit: bytes\n"	\
+"  length    : size to move\n"						\
+
+static void do_move_range(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	struct f2fs_move_range range;
+	int ret, fd;
+
+	if (argc != 6) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_RDWR, 0);
+	range.dst_fd = xopen(argv[2], O_RDWR | O_CREAT, 0644);
+	range.pos_in = atoi(argv[3]);
+	range.pos_out = atoi(argv[4]);
+	range.len = atoi(argv[5]);
+
+	ret = ioctl(fd, F2FS_IOC_MOVE_RANGE, &range);
+	if (ret < 0)
+		die_errno("F2FS_IOC_MOVE_RANGE failed");
+
+	printf("move range ret=%d\n", ret);
+	exit(0);
+}
+
+#define gc_range_desc "trigger filesystem gc_range"
+#define gc_range_help "f2fs_io gc_range [sync_mode] [start] [length] [file_path]\n\n"\
+"  sync_mode : 0: asynchronous, 1: synchronous\n"			\
+"  start     : start offset of defragment region, unit: 4kb\n"	\
+"  length    : bytes number of defragment region, unit: 4kb\n"	\
+
+static void do_gc_range(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	struct f2fs_gc_range range;
+	int ret, fd;
+
+	if (argc != 5) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	range.sync = atoi(argv[1]);
+	range.start = (u64)atoi(argv[2]);
+	range.len = (u64)atoi(argv[3]);
+
+	fd = xopen(argv[4], O_RDWR, 0);
+
+	ret = ioctl(fd, F2FS_IOC_GARBAGE_COLLECT_RANGE, &range);
+	if (ret < 0) {
+		die_errno("F2FS_IOC_GARBAGE_COLLECT_RANGE failed");
+	}
+
+	printf("trigger %s gc_range [%"PRIu64", %"PRIu64"] ret=%d\n",
+		range.sync ? "synchronous" : "asynchronous",
+		range.start, range.len, ret);
+	exit(0);
+}
+
+#define listxattr_desc "listxattr"
+#define listxattr_help "f2fs_io listxattr [file_path]\n\n"
+
+static void do_listxattr(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	char *buf, *key, *val;
+	ssize_t buflen, vallen, keylen;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	buflen = listxattr(argv[1], NULL, 0);
+	if (buflen == -1) {
+		perror("listxattr");
+		exit(1);
+	}
+	if (buflen == 0) {
+		printf("%s has no attributes.\n", argv[1]);
+		exit(0);
+	}
+	buf = xmalloc(buflen);
+	buflen = listxattr(argv[1], buf, buflen);
+	if (buflen == -1) {
+		perror("listxattr");
+		exit(1);
+	}
+
+	key = buf;
+	while (buflen > 0) {
+		printf("%s: ", key);
+		vallen = getxattr(argv[1], key, NULL, 0);
+		if (vallen == -1) {
+			perror("getxattr");
+			exit(1);
+		}
+		if (vallen == 0) {
+			printf("<no value>");
+		} else {
+			val = xmalloc(vallen + 1);
+			vallen = getxattr(argv[1], key, val, vallen);
+			if (vallen == -1) {
+				perror("getxattr");
+				exit(1);
+			}
+			val[vallen] = 0;
+			printf("%s", val);
+			free(val);
+		}
+		printf("\n");
+		keylen = strlen(key) + 1;
+		buflen -= keylen;
+		key += keylen;
+	}
+	exit(0);
+}
+
+#define setxattr_desc "setxattr"
+#define setxattr_help "f2fs_io setxattr [name] [value] [file_path]\n\n"
+
+static void do_setxattr(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret;
+
+	if (argc != 4) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	ret = setxattr(argv[3], argv[1], argv[2], strlen(argv[2]), XATTR_CREATE);
+	printf("setxattr %s CREATE: name: %s, value: %s: ret=%d\n",
+			argv[3], argv[1], argv[2], ret);
+	if (ret < 0 && errno == EEXIST) {
+		ret = setxattr(argv[3], argv[1], argv[2], strlen(argv[2]), XATTR_REPLACE);
+		printf("setxattr %s REPLACE: name: %s, value: %s: ret=%d\n",
+				argv[3], argv[1], argv[2], ret);
+	}
+	if (ret < 0)
+		perror("setxattr");
+	exit(0);
+}
+
+#define removexattr_desc "removexattr"
+#define removexattr_help "f2fs_io removexattr [name] [file_path]\n\n"
+
+static void do_removexattr(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	ret = removexattr(argv[2], argv[1]);
+	printf("removexattr %s REMOVE: name: %s: ret=%d\n", argv[1], argv[2], ret);
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -1322,8 +1641,10 @@ const struct cmd_desc cmd_list[] = {
 	CMD(set_verity),
 	CMD(getflags),
 	CMD(setflags),
+	CMD(clearflags),
 	CMD(shutdown),
 	CMD(pinfile),
+	CMD(fadvise),
 	CMD(fallocate),
 	CMD(erase),
 	CMD(write),
@@ -1343,6 +1664,13 @@ const struct cmd_desc cmd_list[] = {
 	CMD(get_filename_encrypt_mode),
 	CMD(rename),
 	CMD(gc),
+	CMD(checkpoint),
+	CMD(precache_extents),
+	CMD(move_range),
+	CMD(gc_range),
+	CMD(listxattr),
+	CMD(setxattr),
+	CMD(removexattr),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 
