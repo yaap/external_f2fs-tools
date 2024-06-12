@@ -558,6 +558,16 @@ static int f2fs_prepare_super_block(void)
 		c.cur_seg[CURSEG_WARM_DATA] = next_zone(CURSEG_COLD_DATA);
 	} else if (c.zoned_mode) {
 		c.cur_seg[CURSEG_HOT_NODE] = 0;
+		if (c.zoned_model == F2FS_ZONED_HM) {
+			uint32_t conv_zones =
+				c.devices[0].total_segments / c.segs_per_zone
+				- total_meta_zones;
+
+			if (total_zones - conv_zones >= avail_zones)
+				c.cur_seg[CURSEG_HOT_NODE] =
+					(c.devices[1].start_blkaddr -
+					 get_sb(main_blkaddr)) / c.blks_per_seg;
+		}
 		c.cur_seg[CURSEG_WARM_NODE] = next_zone(CURSEG_HOT_NODE);
 		c.cur_seg[CURSEG_COLD_NODE] = next_zone(CURSEG_WARM_NODE);
 		c.cur_seg[CURSEG_HOT_DATA] = next_zone(CURSEG_COLD_NODE);
@@ -1362,9 +1372,9 @@ static int f2fs_write_default_quota(int qtype, __le32 raw_id)
 	dqblk.dqb_bhardlimit = cpu_to_le64(0);
 	dqblk.dqb_bsoftlimit = cpu_to_le64(0);
 	if (c.lpf_ino)
-		dqblk.dqb_curspace = cpu_to_le64(8192);
+		dqblk.dqb_curspace = cpu_to_le64(F2FS_BLKSIZE * 2);
 	else
-		dqblk.dqb_curspace = cpu_to_le64(4096);
+		dqblk.dqb_curspace = cpu_to_le64(F2FS_BLKSIZE);
 	dqblk.dqb_btime = cpu_to_le64(0);
 	dqblk.dqb_itime = cpu_to_le64(0);
 

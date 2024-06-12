@@ -165,7 +165,7 @@ static int dcache_alloc_all(long n)
 		|| (dcache_lastused = (uint64_t *)
 				malloc(sizeof(uint64_t) * n)) == NULL
 		|| (dcache_buf = (char *) malloc (F2FS_BLKSIZE * n)) == NULL
-		|| (dcache_valid = (bool *) malloc(sizeof(bool) * n)) == NULL)
+		|| (dcache_valid = (bool *) calloc(sizeof(bool) * n, 1)) == NULL)
 	{
 		dcache_release();
 		return -1;
@@ -580,6 +580,7 @@ int dev_write(void *buf, __u64 offset, size_t len)
 		return -1;
 	if (write(fd, buf, len) < 0)
 		return -1;
+	c.need_fsync = true;
 	return 0;
 }
 
@@ -616,6 +617,7 @@ int dev_fill(void *buf, __u64 offset, size_t len)
 		return -1;
 	if (write(fd, buf, len) < 0)
 		return -1;
+	c.need_fsync = true;
 	return 0;
 }
 
@@ -638,6 +640,9 @@ int f2fs_fsync_device(void)
 {
 #ifdef HAVE_FSYNC
 	int i;
+
+	if (!c.need_fsync)
+		return 0;
 
 	for (i = 0; i < c.ndevs; i++) {
 		if (fsync(c.devices[i].fd) < 0) {
@@ -662,14 +667,17 @@ int f2fs_init_sparse_file(void)
 		if (!f2fs_sparse_file)
 			return -1;
 
+		c.blksize = sparse_file_block_size(f2fs_sparse_file);
+		c.blksize_bits = log_base_2(c.blksize);
+		if (c.blksize_bits == -1) {
+			MSG(0, "\tError: Sparse file blocksize not a power of 2.\n");
+			return -1;
+		}
+
 		c.device_size = sparse_file_len(f2fs_sparse_file, 0, 0);
 		c.device_size &= (~((uint64_t)(F2FS_BLKSIZE - 1)));
 	}
 
-	if (sparse_file_block_size(f2fs_sparse_file) != F2FS_BLKSIZE) {
-		MSG(0, "\tError: Corrupted sparse file\n");
-		return -1;
-	}
 	blocks_count = c.device_size / F2FS_BLKSIZE;
 	blocks = calloc(blocks_count, sizeof(char *));
 	if (!blocks) {
@@ -786,10 +794,12 @@ int f2fs_finalize_device(void)
 	 */
 	for (i = 0; i < c.ndevs; i++) {
 #ifdef HAVE_FSYNC
-		ret = fsync(c.devices[i].fd);
-		if (ret < 0) {
-			MSG(0, "\tError: Could not conduct fsync!!!\n");
-			break;
+		if (c.need_fsync) {
+			ret = fsync(c.devices[i].fd);
+			if (ret < 0) {
+				MSG(0, "\tError: Could not conduct fsync!!!\n");
+				break;
+			}
 		}
 #endif
 		ret = close(c.devices[i].fd);

@@ -19,6 +19,12 @@
 #endif
 #include <time.h>
 #include <sys/stat.h>
+#ifdef HAVE_LINUX_LOOP_H
+#include <linux/loop.h>
+#ifdef HAVE_LINUX_MAJOR_H
+#include <linux/major.h>
+#endif
+#endif
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
@@ -756,7 +762,7 @@ int f2fs_dev_is_umounted(char *path)
 #ifdef _WIN32
 	return 0;
 #else
-	struct stat *st_buf;
+	struct stat st_buf;
 	int is_rootdev = 0;
 	int ret = 0;
 	char *rootdev_name = get_rootdev();
@@ -807,32 +813,81 @@ int f2fs_dev_is_umounted(char *path)
 	 * If f2fs is umounted with -l, the process can still use
 	 * the file system. In this case, we should not format.
 	 */
-	st_buf = malloc(sizeof(struct stat));
-	ASSERT(st_buf);
+	if (stat(path, &st_buf)) {
+		/* sparse file will be created after this. */
+		if (c.sparse_mode)
+			return 0;
+		MSG(0, "Info: stat failed errno:%d\n", errno);
+		return -1;
+	}
 
-	if (stat(path, st_buf) == 0 && S_ISBLK(st_buf->st_mode)) {
+	if (S_ISBLK(st_buf.st_mode)) {
 		int fd = open(path, O_RDONLY | O_EXCL);
 
 		if (fd >= 0) {
 			close(fd);
 		} else if (errno == EBUSY) {
 			MSG(0, "\tError: In use by the system!\n");
-			free(st_buf);
-			return -1;
+			return -EBUSY;
 		}
+	} else if (S_ISREG(st_buf.st_mode)) {
+		/* check whether regular is backfile of loop device */
+#if defined(HAVE_LINUX_LOOP_H) && defined(HAVE_LINUX_MAJOR_H)
+		struct mntent *mnt;
+		struct stat st_loop;
+		FILE *f;
+
+		f = setmntent("/proc/mounts", "r");
+
+		while ((mnt = getmntent(f)) != NULL) {
+			struct loop_info64 loopinfo = {0, };
+			int loop_fd, err;
+
+			if (mnt->mnt_fsname[0] != '/')
+				continue;
+			if (stat(mnt->mnt_fsname, &st_loop) != 0)
+				continue;
+			if (!S_ISBLK(st_loop.st_mode))
+				continue;
+			if (major(st_loop.st_rdev) != LOOP_MAJOR)
+				continue;
+
+			loop_fd = open(mnt->mnt_fsname, O_RDONLY);
+			if (loop_fd < 0) {
+				MSG(0, "Info: open %s failed errno:%d\n",
+					mnt->mnt_fsname, errno);
+				return -1;
+			}
+
+			err = ioctl(loop_fd, LOOP_GET_STATUS64, &loopinfo);
+			close(loop_fd);
+			if (err < 0) {
+				MSG(0, "\tError: ioctl LOOP_GET_STATUS64 failed errno:%d!\n",
+					errno);
+				return -1;
+			}
+
+			if (st_buf.st_dev == loopinfo.lo_device &&
+				st_buf.st_ino == loopinfo.lo_inode) {
+				MSG(0, "\tError: In use by loop device!\n");
+				return -EBUSY;
+			}
+		}
+#endif
 	}
-	free(st_buf);
 	return ret;
 #endif
 }
 
 int f2fs_devs_are_umounted(void)
 {
-	int i;
+	int ret, i;
 
-	for (i = 0; i < c.ndevs; i++)
-		if (f2fs_dev_is_umounted((char *)c.devices[i].path))
-			return -1;
+	for (i = 0; i < c.ndevs; i++) {
+		ret = f2fs_dev_is_umounted((char *)c.devices[i].path);
+		if (ret)
+			return ret;
+	}
 	return 0;
 }
 
@@ -919,6 +974,7 @@ int get_device_info(int i)
 	unsigned char model_inq[6] = {MODELINQUIRY};
 #endif
 	struct device_info *dev = c.devices + i;
+	int flags = O_RDWR;
 
 	if (c.sparse_mode) {
 		fd = open(dev->path, O_RDWR | O_CREAT | O_BINARY, 0644);
@@ -931,23 +987,36 @@ int get_device_info(int i)
 		}
 	}
 
-	stat_buf = malloc(sizeof(struct stat));
+	stat_buf = calloc(1, sizeof(struct stat));
 	ASSERT(stat_buf);
 
-	if (!c.sparse_mode) {
-		if (stat(dev->path, stat_buf) < 0 ) {
-			MSG(0, "\tError: Failed to get the device stat!\n");
+	if (stat(dev->path, stat_buf) < 0) {
+		MSG(0, "\tError: Failed to get the device stat!\n");
+		free(stat_buf);
+		return -1;
+	}
+
+#ifdef __linux__
+	if (S_ISBLK(stat_buf->st_mode)) {
+		if (f2fs_get_zoned_model(i) < 0) {
 			free(stat_buf);
 			return -1;
 		}
+	}
+#endif
+
+	if (!c.sparse_mode) {
+		if (dev->zoned_model == F2FS_ZONED_HM && c.func == FSCK)
+			flags |= O_DSYNC;
 
 		if (S_ISBLK(stat_buf->st_mode) &&
 				!c.force && c.func != DUMP && !c.dry_run) {
-			fd = open(dev->path, O_RDWR | O_EXCL);
+			flags |= O_EXCL;
+			fd = open(dev->path, flags);
 			if (fd < 0)
 				fd = open_check_fs(dev->path, O_EXCL);
 		} else {
-			fd = open(dev->path, O_RDWR);
+			fd = open(dev->path, flags);
 			if (fd < 0)
 				fd = open_check_fs(dev->path, 0);
 		}
@@ -960,7 +1029,7 @@ int get_device_info(int i)
 
 	dev->fd = fd;
 
-	if (c.sparse_mode) {
+	if (c.sparse_mode && i == 0) {
 		if (f2fs_init_sparse_file()) {
 			free(stat_buf);
 			return -1;
@@ -1047,13 +1116,6 @@ int get_device_info(int i)
 	}
 
 #ifdef __linux__
-	if (S_ISBLK(stat_buf->st_mode)) {
-		if (f2fs_get_zoned_model(i) < 0) {
-			free(stat_buf);
-			return -1;
-		}
-	}
-
 	if (dev->zoned_model != F2FS_ZONED_NONE) {
 
 		/* Get the number of blocks per zones */
@@ -1104,6 +1166,7 @@ int get_device_info(int i)
 		}
 	}
 #endif
+
 	/* adjust wanted_total_sectors */
 	if (c.wanted_total_sectors != -1) {
 		MSG(0, "Info: wanted sectors = %"PRIu64" (in %"PRIu64" bytes)\n",
@@ -1213,7 +1276,7 @@ int get_device_info(int i)
 	c.sectors_per_blk = F2FS_BLKSIZE / c.sector_size;
 	c.total_sectors += dev->total_sectors;
 
-	if (c.sparse_mode && f2fs_init_sparse_file())
+	if (c.sparse_mode && i==0 && f2fs_init_sparse_file())
 		return -1;
 	return 0;
 }

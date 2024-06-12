@@ -834,6 +834,9 @@ static int do_fsck(struct f2fs_sb_info *sbi)
 
 	print_cp_state(flag);
 
+	if (c.roll_forward && c.zoned_model == F2FS_ZONED_HM)
+		save_curseg_warm_node_info(sbi);
+
 	fsck_chk_and_fix_write_pointers(sbi);
 
 	fsck_chk_curseg_info(sbi);
@@ -1108,8 +1111,8 @@ int main(int argc, char **argv)
 
 	f2fs_parse_options(argc, argv);
 
-	if (c.func != DUMP && f2fs_devs_are_umounted() < 0) {
-		if (errno == EBUSY) {
+	if (c.func != DUMP && (ret = f2fs_devs_are_umounted()) < 0) {
+		if (ret == -EBUSY) {
 			ret = -1;
 			if (c.func == FSCK)
 				ret = FSCK_OPERATIONAL_ERROR;
