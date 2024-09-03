@@ -296,17 +296,19 @@ static int f2fs_prepare_super_block(void)
 	for (i = 0; i < c.ndevs; i++) {
 		if (i == 0) {
 			c.devices[i].total_segments =
-				(c.devices[i].total_sectors *
+				((c.devices[i].total_sectors *
 				c.sector_size - zone_align_start_offset) /
-				segment_size_bytes;
+				segment_size_bytes) / c.segs_per_zone *
+				c.segs_per_zone;
 			c.devices[i].start_blkaddr = 0;
 			c.devices[i].end_blkaddr = c.devices[i].total_segments *
 						c.blks_per_seg - 1 +
 						sb->segment0_blkaddr;
 		} else {
 			c.devices[i].total_segments =
-				c.devices[i].total_sectors /
-				(c.sectors_per_blk * c.blks_per_seg);
+				(c.devices[i].total_sectors /
+				(c.sectors_per_blk * c.blks_per_seg)) /
+				c.segs_per_zone * c.segs_per_zone;
 			c.devices[i].start_blkaddr =
 					c.devices[i - 1].end_blkaddr + 1;
 			c.devices[i].end_blkaddr = c.devices[i].start_blkaddr +
@@ -321,8 +323,7 @@ static int f2fs_prepare_super_block(void)
 
 		c.total_segments += c.devices[i].total_segments;
 	}
-	set_sb(segment_count, (c.total_segments / c.segs_per_zone *
-						c.segs_per_zone));
+	set_sb(segment_count, c.total_segments);
 	set_sb(segment_count_ckpt, F2FS_NUMBER_OF_CHECKPOINT_PACK);
 
 	set_sb(sit_blkaddr, get_sb(segment0_blkaddr) +
@@ -548,14 +549,6 @@ static int f2fs_prepare_super_block(void)
 		c.cur_seg[CURSEG_HOT_DATA] = 0;
 		c.cur_seg[CURSEG_COLD_DATA] = 0;
 		c.cur_seg[CURSEG_WARM_DATA] = 0;
-	} else if (c.heap) {
-		c.cur_seg[CURSEG_HOT_NODE] =
-				last_section(last_zone(total_zones));
-		c.cur_seg[CURSEG_WARM_NODE] = prev_zone(CURSEG_HOT_NODE);
-		c.cur_seg[CURSEG_COLD_NODE] = prev_zone(CURSEG_WARM_NODE);
-		c.cur_seg[CURSEG_HOT_DATA] = prev_zone(CURSEG_COLD_NODE);
-		c.cur_seg[CURSEG_COLD_DATA] = 0;
-		c.cur_seg[CURSEG_WARM_DATA] = next_zone(CURSEG_COLD_DATA);
 	} else if (c.zoned_mode) {
 		c.cur_seg[CURSEG_HOT_NODE] = 0;
 		if (c.zoned_model == F2FS_ZONED_HM) {
@@ -786,7 +779,8 @@ static int f2fs_write_check_point_pack(void)
 		 * In non configurable reserved section case, overprovision
 		 * segments are always bigger than two sections.
 		 */
-		if (get_cp(overprov_segment_count) < 2 * get_sb(segs_per_sec)) {
+		if (get_cp(overprov_segment_count) <
+					overprovision_segment_buffer(sb)) {
 			MSG(0, "\tError: Not enough overprovision segments (%u)\n",
 			    get_cp(overprov_segment_count));
 			goto free_cp_payload;
@@ -795,7 +789,7 @@ static int f2fs_write_check_point_pack(void)
 				get_cp(rsvd_segment_count));
 	 } else {
 		set_cp(overprov_segment_count, get_cp(overprov_segment_count) +
-				2 * get_sb(segs_per_sec));
+				overprovision_segment_buffer(sb));
 	 }
 
 	if (f2fs_get_usable_segments(sb) <= get_cp(overprov_segment_count)) {

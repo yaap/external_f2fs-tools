@@ -215,6 +215,7 @@ cc_binary {
         "fsck_main_src_files",
     ],
     host_supported: true,
+    vendor_available: true,
     recovery_available: true,
     cflags: ["-DWITH_RESIZE", "-DWITH_DEFRAG", "-DWITH_DUMP"],
     srcs: ["fsck/fsck.c", "fsck/resize.c", "fsck/defrag.c"],

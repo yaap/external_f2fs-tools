@@ -1071,13 +1071,13 @@ check_next:
 			qf_szchk_type[cur_qtype] = QF_SZCHK_INLINE;
 		block_t blkaddr = le32_to_cpu(node_blk->i.i_addr[ofs]);
 
-		if (blkaddr != 0) {
+		if (blkaddr != NULL_ADDR) {
 			ASSERT_MSG("[0x%x] wrong inline reserve blkaddr:%u",
 					nid, blkaddr);
 			if (c.fix_on) {
 				FIX_MSG("inline_data has wrong 0'th block = %x",
 								blkaddr);
-				node_blk->i.i_addr[ofs] = 0;
+				node_blk->i.i_addr[ofs] = NULL_ADDR;
 				node_blk->i.i_blocks = cpu_to_le64(*blk_cnt);
 				need_fix = 1;
 			}
@@ -1121,7 +1121,7 @@ check_next:
 			if (c.fix_on) {
 				FIX_MSG("inline_dentry has wrong 0'th block = %x",
 								blkaddr);
-				node_blk->i.i_addr[ofs] = 0;
+				node_blk->i.i_addr[ofs] = NULL_ADDR;
 				node_blk->i.i_blocks = cpu_to_le64(*blk_cnt);
 				need_fix = 1;
 			}
@@ -1161,8 +1161,8 @@ check_next:
 					node_blk->i.i_addr[ofs + idx] =
 							NULL_ADDR;
 					need_fix = 1;
-					FIX_MSG("[0x%x] i_addr[%d] = 0", nid,
-							ofs + idx);
+					FIX_MSG("[0x%x] i_addr[%d] = NULL_ADDR",
+							nid, ofs + idx);
 				}
 				continue;
 			}
@@ -1190,9 +1190,9 @@ check_next:
 			if (cur_qtype != -1 && blkaddr != NEW_ADDR)
 				qf_last_blkofs[cur_qtype] = child.pgofs;
 		} else if (c.fix_on) {
-			node_blk->i.i_addr[ofs + idx] = 0;
+			node_blk->i.i_addr[ofs + idx] = NULL_ADDR;
 			need_fix = 1;
-			FIX_MSG("[0x%x] i_addr[%d] = 0", nid, ofs + idx);
+			FIX_MSG("[0x%x] i_addr[%d] = NULL_ADDR", nid, ofs + idx);
 		}
 	}
 
@@ -1253,8 +1253,8 @@ check:
 	}
 
 	if (i_blocks != *blk_cnt) {
-		ASSERT_MSG("ino: 0x%x has i_blocks: %08"PRIx64", "
-				"but has %u blocks",
+		ASSERT_MSG("ino: 0x%x has i_blocks: 0x%08"PRIx64", "
+				"but has 0x%x blocks",
 				nid, i_blocks, *blk_cnt);
 		if (c.fix_on) {
 			node_blk->i.i_blocks = cpu_to_le64(*blk_cnt);
@@ -1651,7 +1651,7 @@ static void print_dentry(struct f2fs_sb_info *sbi, __u8 *name,
 			d = d->next;
 		}
 		printf("/%s", new);
-		if (dump_node(sbi, le32_to_cpu(dentry[idx].ino), 0))
+		if (dump_node(sbi, le32_to_cpu(dentry[idx].ino), 0, NULL, 0, 0))
 			printf("\33[2K\r");
 	} else {
 		for (i = 1; i < depth; i++)
@@ -3288,38 +3288,39 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 
 	last_valid_blkoff = last_vblk_off_in_zone(sbi, zone_segno);
 
-	/*
-	 * When there is no valid block in the zone, check write pointer is
-	 * at zone start. If not, reset the write pointer.
-	 */
-	if (last_valid_blkoff < 0 &&
-	    blk_zone_wp_sector(blkz) != blk_zone_sector(blkz)) {
-		if (!c.fix_on) {
-			MSG(0, "Inconsistent write pointer: wp[0x%x,0x%x]\n",
-			    wp_segno, wp_blkoff);
-			fsck->chk.wp_inconsistent_zones++;
-			return 0;
-		}
-
-		FIX_MSG("Reset write pointer of zone at segment 0x%x",
-			zone_segno);
-		ret = f2fs_reset_zone(wpd->dev_index, blkz);
-		if (ret) {
-			printf("[FSCK] Write pointer reset failed: %s\n",
-			       dev->path);
-			return ret;
-		}
-		fsck->chk.wp_fixed = 1;
-		return 0;
-	}
-
 	/* if a curseg points to the zone, do not finishing zone */
 	for (i = 0; i < NO_CHECK_TYPE; i++) {
 		struct curseg_info *cs = CURSEG_I(sbi, i);
 
 		if (zone_segno <= cs->segno &&
-				cs->segno < zone_segno + segs_per_zone)
+				cs->segno < zone_segno + segs_per_zone) {
+			/*
+			 * When there is no valid block in the zone, check
+			 * write pointer is at zone start. If not, reset
+			 * the write pointer.
+			 */
+			if (last_valid_blkoff < 0 &&
+			    blk_zone_wp_sector(blkz) != blk_zone_sector(blkz)) {
+				if (!c.fix_on) {
+					MSG(0, "Inconsistent write pointer: "
+					       "wp[0x%x,0x%x]\n",
+					       wp_segno, wp_blkoff);
+					fsck->chk.wp_inconsistent_zones++;
+					return 0;
+				}
+
+				FIX_MSG("Reset write pointer of zone at "
+					"segment 0x%x", zone_segno);
+				ret = f2fs_reset_zone(wpd->dev_index, blkz);
+				if (ret) {
+					printf("[FSCK] Write pointer reset "
+					       "failed: %s\n", dev->path);
+					return ret;
+				}
+				fsck->chk.wp_fixed = 1;
+			}
 			return 0;
+		}
 	}
 
 	/*
@@ -3631,7 +3632,7 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 		if (!strcasecmp(ans, "y")) {
 			for (i = 0; i < fsck->nr_nat_entries; i++) {
 				if (f2fs_test_bit(i, fsck->nat_area_bitmap))
-					dump_node(sbi, i, 1);
+					dump_node(sbi, i, 1, NULL, 1, 0);
 			}
 		}
 	}

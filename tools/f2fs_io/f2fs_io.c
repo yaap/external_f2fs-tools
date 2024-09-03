@@ -442,7 +442,7 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define pinfile_desc "pin file control"
 #define pinfile_help						\
-"f2fs_io pinfile [get|set] [file]\n\n"			\
+"f2fs_io pinfile [get|set|unset] [file]\n\n"			\
 "get/set pinning given the file\n"				\
 
 static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
@@ -464,7 +464,14 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
 		if (ret != 0)
 			die_errno("F2FS_IOC_SET_PIN_FILE failed");
-		printf("set_pin_file: %u blocks moved in %s\n", ret, argv[2]);
+		printf("%s pinfile: %u blocks moved in %s\n",
+					argv[1], ret, argv[2]);
+	} else if (!strcmp(argv[1], "unset")) {
+		pin = 0;
+		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
+		if (ret != 0)
+			die_errno("F2FS_IOC_SET_PIN_FILE failed");
+		printf("%s pinfile in %s\n", argv[1], argv[2]);
 	} else if (!strcmp(argv[1], "get")) {
 		unsigned int flags;
 
@@ -597,26 +604,8 @@ static void do_erase(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
-#define write_desc "write data into file"
-#define write_help					\
-"f2fs_io write [chunk_size in 4kb] [offset in chunk_size] [count] [pattern] [IO] [file_path] {delay}\n\n"	\
-"Write given patten data in file_path\n"		\
-"pattern can be\n"					\
-"  zero          : zeros\n"				\
-"  inc_num       : incrementing numbers\n"		\
-"  rand          : random numbers\n"			\
-"IO can be\n"						\
-"  buffered      : buffered IO\n"			\
-"  dio           : O_DIRECT\n"				\
-"  dsync         : O_DIRECT | O_DSYNC\n"		\
-"  osync         : O_SYNC\n"				\
-"  atomic_commit : atomic write & commit\n"		\
-"  atomic_abort  : atomic write & abort\n"		\
-"  atomic_rcommit: atomic replace & commit\n"	\
-"  atomic_rabort : atomic replace & abort\n"	\
-"{delay} is in ms unit and optional only for atomic operations\n"
-
-static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
+static void do_write_with_advice(int argc, char **argv,
+			const struct cmd_desc *cmd, bool with_advice)
 {
 	u64 buf_size = 0, inc_num = 0, written = 0;
 	u64 offset;
@@ -629,12 +618,6 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 	int useconds = 0;
 
 	srand(time(0));
-
-	if (argc < 7 || argc > 8) {
-		fputs("Excess arguments\n\n", stderr);
-		fputs(cmd->cmd_help, stderr);
-		exit(1);
-	}
 
 	bs = atoi(argv[1]);
 	if (bs > 1024)
@@ -672,7 +655,28 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 		die("Wrong IO type");
 	}
 
-	fd = xopen(argv[6], O_CREAT | O_WRONLY | flags, 0755);
+	if (!with_advice) {
+		fd = xopen(argv[6], O_CREAT | O_WRONLY | flags, 0755);
+	} else {
+		unsigned char advice;
+		int ret;
+
+		if (!strcmp(argv[6], "hot"))
+			advice = FADVISE_HOT_BIT;
+		else if (!strcmp(argv[6], "cold"))
+			advice = FADVISE_COLD_BIT;
+		else
+			die("Wrong Advise type");
+
+		fd = xopen(argv[7], O_CREAT | O_WRONLY | flags, 0755);
+
+		ret = fsetxattr(fd, F2FS_SYSTEM_ADVISE_NAME,
+				    (char *)&advice, 1, XATTR_CREATE);
+		if (ret) {
+			fputs("fsetxattr advice failed\n", stderr);
+			exit(1);
+		}
+	}
 
 	if (atomic_commit || atomic_abort) {
 		int ret;
@@ -737,6 +741,67 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 				get_current_us() - total_time,
 				max_time);
 	exit(0);
+}
+
+#define write_desc "write data into file"
+#define write_help					\
+"f2fs_io write [chunk_size in 4kb] [offset in chunk_size] [count] [pattern] [IO] [file_path] {delay}\n\n"	\
+"Write given patten data in file_path\n"		\
+"pattern can be\n"					\
+"  zero          : zeros\n"				\
+"  inc_num       : incrementing numbers\n"		\
+"  rand          : random numbers\n"			\
+"IO can be\n"						\
+"  buffered      : buffered IO\n"			\
+"  dio           : O_DIRECT\n"				\
+"  dsync         : O_DIRECT | O_DSYNC\n"		\
+"  osync         : O_SYNC\n"				\
+"  atomic_commit : atomic write & commit\n"		\
+"  atomic_abort  : atomic write & abort\n"		\
+"  atomic_rcommit: atomic replace & commit\n"		\
+"  atomic_rabort : atomic replace & abort\n"		\
+"{delay} is in ms unit and optional only for atomic operations\n"
+
+static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	if (argc < 7 || argc > 8) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+	do_write_with_advice(argc, argv, cmd, false);
+}
+
+#define write_advice_desc "write data into file with a hint"
+#define write_advice_help					\
+"f2fs_io write_advice [chunk_size in 4kb] [offset in chunk_size] [count] [pattern] [IO] [advise] [file_path] {delay}\n\n"	\
+"Write given patten data in file_path\n"		\
+"pattern can be\n"					\
+"  zero          : zeros\n"				\
+"  inc_num       : incrementing numbers\n"		\
+"  rand          : random numbers\n"			\
+"IO can be\n"						\
+"  buffered      : buffered IO\n"			\
+"  dio           : O_DIRECT\n"				\
+"  dsync         : O_DIRECT | O_DSYNC\n"		\
+"  osync         : O_SYNC\n"				\
+"  atomic_commit : atomic write & commit\n"		\
+"  atomic_abort  : atomic write & abort\n"		\
+"  atomic_rcommit: atomic replace & commit\n"		\
+"  atomic_rabort : atomic replace & abort\n"		\
+"advise can be\n"					\
+"  cold : indicate a cold file\n"			\
+"  hot  : indicate a hot file\n"			\
+"{delay} is in ms unit and optional only for atomic operations\n"
+
+static void do_write_advice(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	if (argc < 8 || argc > 9) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+	do_write_with_advice(argc, argv, cmd, true);
 }
 
 #define read_desc "read data from file"
@@ -1592,6 +1657,8 @@ static void do_listxattr(int argc, char **argv, const struct cmd_desc *cmd)
 static void do_setxattr(int argc, char **argv, const struct cmd_desc *cmd)
 {
 	int ret;
+	char *value;
+	unsigned char tmp;
 
 	if (argc != 4) {
 		fputs("Excess arguments\n\n", stderr);
@@ -1599,11 +1666,18 @@ static void do_setxattr(int argc, char **argv, const struct cmd_desc *cmd)
 		exit(1);
 	}
 
-	ret = setxattr(argv[3], argv[1], argv[2], strlen(argv[2]), XATTR_CREATE);
+	if (!strcmp(argv[1], F2FS_SYSTEM_ADVISE_NAME)) {
+		tmp = strtoul(argv[2], NULL, 0);
+		value = (char *)&tmp;
+	} else {
+		value = argv[2];
+	}
+
+	ret = setxattr(argv[3], argv[1], value, strlen(argv[2]), XATTR_CREATE);
 	printf("setxattr %s CREATE: name: %s, value: %s: ret=%d\n",
 			argv[3], argv[1], argv[2], ret);
 	if (ret < 0 && errno == EEXIST) {
-		ret = setxattr(argv[3], argv[1], argv[2], strlen(argv[2]), XATTR_REPLACE);
+		ret = setxattr(argv[3], argv[1], value, strlen(argv[2]), XATTR_REPLACE);
 		printf("setxattr %s REPLACE: name: %s, value: %s: ret=%d\n",
 				argv[3], argv[1], argv[2], ret);
 	}
@@ -1630,6 +1704,92 @@ static void do_removexattr(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define lseek_desc "do lseek for a file"
+#define lseek_help					\
+"f2fs_io lseek [whence] [offset] [file_path]\n\n"	\
+"Do lseek file data in file_path and return the adjusted file offset\n"	\
+"whence can be\n"					\
+"  set  : SEEK_SET, The file offset is set to offset bytes\n"	\
+"  cur  : SEEK_CUR, The file offset is set to its current location plus offset bytes\n"	\
+"  end  : SEEK_END, The file offset is set to the size of the file plus offset bytes\n"	\
+"  data : SEEK_DATA, set the file offset to the next data location from offset\n"	\
+"  hole : SEEK_HOLE, set the file offset to the next hole from offset\n"
+
+static void do_lseek(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd, whence;
+	off_t offset, ret;
+
+	if (argc != 4) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	offset = atoi(argv[2]);
+
+	if (!strcmp(argv[1], "set"))
+		whence = SEEK_SET;
+	else if (!strcmp(argv[1], "cur"))
+		whence = SEEK_CUR;
+	else if (!strcmp(argv[1], "end"))
+		whence = SEEK_END;
+	else if (!strcmp(argv[1], "data"))
+		whence = SEEK_DATA;
+	else if (!strcmp(argv[1], "hole"))
+		whence = SEEK_HOLE;
+	else
+		die("Wrong whence type");
+
+	fd = xopen(argv[3], O_RDONLY, 0);
+
+	ret = lseek(fd, offset, whence);
+	if (ret < 0)
+		die_errno("lseek failed");
+	printf("returned offset=%ld\n", ret);
+	exit(0);
+}
+
+#define get_advise_desc "get_advise"
+#define get_advise_help "f2fs_io get_advise [file_path]\n\n"
+
+static void do_get_advise(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret;
+	unsigned char value;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	ret = getxattr(argv[1], F2FS_SYSTEM_ADVISE_NAME, &value, sizeof(value));
+	if (ret != sizeof(value)) {
+		perror("getxattr");
+		exit(1);
+	}
+
+	printf("i_advise=0x%x, advise_type: ", value);
+	if (value & FADVISE_COLD_BIT)
+		printf("cold ");
+	if (value & FADVISE_LOST_PINO_BIT)
+		printf("lost_pino ");
+	if (value & FADVISE_ENCRYPT_BIT)
+		printf("encrypt ");
+	if (value & FADVISE_ENC_NAME_BIT)
+		printf("enc_name ");
+	if (value & FADVISE_KEEP_SIZE_BIT)
+		printf("keep_size ");
+	if (value & FADVISE_HOT_BIT)
+		printf("hot ");
+	if (value & FADVISE_VERITY_BIT)
+		printf("verity ");
+	if (value & FADVISE_TRUNC_BIT)
+		printf("trunc ");
+	printf("\n");
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -1648,6 +1808,7 @@ const struct cmd_desc cmd_list[] = {
 	CMD(fallocate),
 	CMD(erase),
 	CMD(write),
+	CMD(write_advice),
 	CMD(read),
 	CMD(randread),
 	CMD(fiemap),
@@ -1671,6 +1832,8 @@ const struct cmd_desc cmd_list[] = {
 	CMD(listxattr),
 	CMD(setxattr),
 	CMD(removexattr),
+	CMD(lseek),
+	CMD(get_advise),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 

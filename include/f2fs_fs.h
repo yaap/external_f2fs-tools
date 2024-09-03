@@ -718,6 +718,7 @@ enum stop_cp_reason {
 	STOP_CP_REASON_CORRUPTED_SUMMARY,
 	STOP_CP_REASON_UPDATE_INODE,
 	STOP_CP_REASON_FLUSH_FAIL,
+	STOP_CP_REASON_NO_SEGMENT,
 	STOP_CP_REASON_MAX,
 };
 
@@ -1475,7 +1476,6 @@ struct f2fs_configuration {
 	char *vol_uuid;
 	uint16_t s_encoding;
 	uint16_t s_encoding_flags;
-	int heap;
 	int32_t kd;
 	int32_t dump_fd;
 	struct device_info devices[MAX_DEVICES];
@@ -1760,25 +1760,33 @@ extern uint32_t f2fs_get_usable_segments(struct f2fs_super_block *sb);
 #define ZONE_ALIGN(blks)	SIZE_ALIGN(blks, c.blks_per_seg * \
 					c.segs_per_zone)
 
-static inline double get_reserved(struct f2fs_super_block *sb, double ovp)
+static inline uint32_t get_reserved(struct f2fs_super_block *sb, double ovp)
 {
-	double reserved;
 	uint32_t usable_main_segs = f2fs_get_usable_segments(sb);
 	uint32_t segs_per_sec = round_up(usable_main_segs, get_sb(section_count));
+	uint32_t reserved;
 
 	if (c.conf_reserved_sections)
 		reserved = c.conf_reserved_sections * segs_per_sec;
 	else
 		reserved = (100 / ovp + 1 + NR_CURSEG_TYPE) * segs_per_sec;
 
-	return reserved;
+	/* Let's keep the section alignment */
+	return round_up(reserved, segs_per_sec) * segs_per_sec;
+}
+
+static inline uint32_t overprovision_segment_buffer(struct f2fs_super_block *sb)
+{
+	/* Give 6 current sections to avoid huge GC overheads. */
+	return 6 * get_sb(segs_per_sec);
 }
 
 static inline double get_best_overprovision(struct f2fs_super_block *sb)
 {
-	double reserved, ovp, candidate, end, diff, space;
+	double ovp, candidate, end, diff, space;
 	double max_ovp = 0, max_space = 0;
 	uint32_t usable_main_segs = f2fs_get_usable_segments(sb);
+	uint32_t reserved;
 
 	if (get_sb(segment_count_main) < 256) {
 		candidate = 10;
@@ -1795,8 +1803,8 @@ static inline double get_best_overprovision(struct f2fs_super_block *sb)
 		ovp = (usable_main_segs - reserved) * candidate / 100;
 		if (ovp < 0)
 			continue;
-		space = usable_main_segs - max(reserved, ovp) -
-					2 * get_sb(segs_per_sec);
+		space = usable_main_segs - max((double)reserved, ovp) -
+					overprovision_segment_buffer(sb);
 		if (max_space < space) {
 			max_space = space;
 			max_ovp = candidate;
