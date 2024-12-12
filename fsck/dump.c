@@ -21,7 +21,7 @@
 #endif
 #include <locale.h>
 
-#define BUF_SZ	80
+#define BUF_SZ	128
 
 /* current extent info */
 struct extent_info dump_extent;
@@ -38,6 +38,7 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 {
 	struct f2fs_nat_block *nat_block;
 	struct f2fs_node *node_block;
+	struct node_footer *footer;
 	nid_t nid;
 	pgoff_t block_addr;
 	char buf[BUF_SZ];
@@ -47,6 +48,7 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 	ASSERT(nat_block);
 	node_block = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_block);
+	footer = F2FS_NODE_FOOTER(node_block);
 
 	fd = open("dump_nat", O_CREAT|O_WRONLY|O_TRUNC, 0666);
 	ASSERT(fd >= 0);
@@ -54,6 +56,7 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 	for (nid = start_nat; nid < end_nat; nid++) {
 		struct f2fs_nat_entry raw_nat;
 		struct node_info ni;
+		int len;
 		if(nid == 0 || nid == F2FS_NODE_INO(sbi) ||
 					nid == F2FS_META_INO(sbi))
 			continue;
@@ -66,15 +69,15 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 			ret = dev_read_block(node_block, ni.blk_addr);
 			ASSERT(ret >= 0);
 			if (ni.blk_addr != 0x0) {
-				memset(buf, 0, BUF_SZ);
-				snprintf(buf, BUF_SZ,
+				len = snprintf(buf, BUF_SZ,
 					"nid:%5u\tino:%5u\toffset:%5u"
-					"\tblkaddr:%10u\tpack:%d\n",
+					"\tblkaddr:%10u\tpack:%d"
+					"\tcp_ver:0x%" PRIx64 "\n",
 					ni.nid, ni.ino,
-					le32_to_cpu(F2FS_NODE_FOOTER(node_block)->flag) >>
-						OFFSET_BIT_SHIFT,
-					ni.blk_addr, pack);
-				ret = write(fd, buf, strlen(buf));
+					le32_to_cpu(footer->flag) >> OFFSET_BIT_SHIFT,
+					ni.blk_addr, pack,
+					le64_to_cpu(footer->cp_ver));
+				ret = write(fd, buf, len);
 				ASSERT(ret >= 0);
 			}
 		} else {
@@ -87,15 +90,15 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 
 			ret = dev_read_block(node_block, ni.blk_addr);
 			ASSERT(ret >= 0);
-			memset(buf, 0, BUF_SZ);
-			snprintf(buf, BUF_SZ,
+			len = snprintf(buf, BUF_SZ,
 				"nid:%5u\tino:%5u\toffset:%5u"
-				"\tblkaddr:%10u\tpack:%d\n",
+				"\tblkaddr:%10u\tpack:%d"
+				"\tcp_ver:0x%" PRIx64 "\n",
 				ni.nid, ni.ino,
-				le32_to_cpu(F2FS_NODE_FOOTER(node_block)->flag) >>
-					OFFSET_BIT_SHIFT,
-				ni.blk_addr, pack);
-			ret = write(fd, buf, strlen(buf));
+				le32_to_cpu(footer->flag) >> OFFSET_BIT_SHIFT,
+				ni.blk_addr, pack,
+				le64_to_cpu(footer->cp_ver));
+			ret = write(fd, buf, len);
 			ASSERT(ret >= 0);
 		}
 	}
@@ -253,20 +256,27 @@ static void dump_folder_contents(struct f2fs_sb_info *sbi, u8 *bitmap,
 {
 	int i;
 	int name_len;
+	char name[F2FS_NAME_LEN + 1] = {0};
 
 	for (i = 0; i < max; i++) {
 		if (test_bit_le(i, bitmap) == 0)
 			continue;
 		name_len = le16_to_cpu(dentry[i].name_len);
+		if (name_len == 0 || name_len > F2FS_NAME_LEN) {
+			MSG(c.force, "Wrong name info\n\n");
+			ASSERT(name_len == 0 || name_len > F2FS_NAME_LEN);
+		}
 		if (name_len == 1 && filenames[i][0] == '.')
 			continue;
 		if (name_len == 2 && filenames[i][0] == '.' && filenames[i][1] == '.')
 			continue;
-		dump_node(sbi, le32_to_cpu(dentry[i].ino), 1, NULL, 0, 1);
+		strncpy(name, (const char *)filenames[i], name_len);
+		name[name_len] = 0;
+		dump_node(sbi, le32_to_cpu(dentry[i].ino), 1, NULL, 0, 1, name);
 	}
 }
 
-static void dump_data_blk(struct f2fs_sb_info *sbi, __u64 offset, u32 blkaddr, bool is_folder)
+static void dump_data_blk(struct f2fs_sb_info *sbi, __u64 offset, u32 blkaddr, int type)
 {
 	char buf[F2FS_BLKSIZE];
 
@@ -307,11 +317,15 @@ static void dump_data_blk(struct f2fs_sb_info *sbi, __u64 offset, u32 blkaddr, b
 		ASSERT(ret >= 0);
 	}
 
-	if (is_folder) {
+	if (S_ISDIR(type)) {
 		struct f2fs_dentry_block *d = (struct f2fs_dentry_block *) buf;
 
 		dump_folder_contents(sbi, d->dentry_bitmap, F2FS_DENTRY_BLOCK_DENTRIES(d),
 					F2FS_DENTRY_BLOCK_FILENAMES(d), NR_DENTRY_IN_BLOCK);
+#if !defined(__MINGW32__)
+	} if (S_ISLNK(type)) {
+		dev_write_symlink(buf, c.dump_sym_target_len);
+#endif
 	} else {
 		/* write blkaddr */
 		dev_write_dump(buf, offset, F2FS_BLKSIZE);
@@ -319,7 +333,7 @@ static void dump_data_blk(struct f2fs_sb_info *sbi, __u64 offset, u32 blkaddr, b
 }
 
 static void dump_node_blk(struct f2fs_sb_info *sbi, int ntype,
-				u32 nid, u32 addr_per_block, u64 *ofs, int is_dir)
+				u32 nid, u32 addr_per_block, u64 *ofs, int type)
 {
 	struct node_info ni;
 	struct f2fs_node *node_blk;
@@ -356,20 +370,20 @@ static void dump_node_blk(struct f2fs_sb_info *sbi, int ntype,
 		switch (ntype) {
 		case TYPE_DIRECT_NODE:
 			dump_data_blk(sbi, *ofs * F2FS_BLKSIZE,
-					le32_to_cpu(node_blk->dn.addr[i]), is_dir);
+					le32_to_cpu(node_blk->dn.addr[i]), type);
 			(*ofs)++;
 			break;
 		case TYPE_INDIRECT_NODE:
 			dump_node_blk(sbi, TYPE_DIRECT_NODE,
 					le32_to_cpu(node_blk->in.nid[i]),
 					addr_per_block,
-					ofs, is_dir);
+					ofs, type);
 			break;
 		case TYPE_DOUBLE_INDIRECT_NODE:
 			dump_node_blk(sbi, TYPE_INDIRECT_NODE,
 					le32_to_cpu(node_blk->in.nid[i]),
 					addr_per_block,
-					ofs, is_dir);
+					ofs, type);
 			break;
 		}
 	}
@@ -377,7 +391,7 @@ static void dump_node_blk(struct f2fs_sb_info *sbi, int ntype,
 }
 
 #ifdef HAVE_FSETXATTR
-static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk, int is_dir)
+static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk, int type)
 {
 	void *xattr;
 	void *last_base_addr;
@@ -431,8 +445,11 @@ static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk, int
 
 		DBG(1, "fd %d xattr_name %s\n", c.dump_fd, xattr_name);
 #if defined(__linux__)
-		if (is_dir) {
+		if (S_ISDIR(type)) {
 			ret = setxattr(".", xattr_name, value,
+							le16_to_cpu(ent->e_value_size), 0);
+		} if (S_ISLNK(type) && c.preserve_symlinks) {
+			ret = lsetxattr(c.dump_symlink, xattr_name, value,
 							le16_to_cpu(ent->e_value_size), 0);
 		} else {
 			ret = fsetxattr(c.dump_fd, xattr_name, value,
@@ -440,8 +457,12 @@ static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk, int
 		}
 
 #elif defined(__APPLE__)
-		if (is_dir) {
+		if (S_ISDIR(type)) {
 			ret = setxattr(".", xattr_name, value,
+					le16_to_cpu(ent->e_value_size), 0,
+					XATTR_CREATE);
+		} if (S_ISLNK(type) && c.preserve_symlinks) {
+			ret = lsetxattr(c.dump_symlink, xattr_name, value,
 					le16_to_cpu(ent->e_value_size), 0,
 					XATTR_CREATE);
 		} else {
@@ -473,14 +494,21 @@ static int dump_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 	u32 i = 0;
 	u64 ofs = 0;
 	u32 addr_per_block;
-	bool is_dir = S_ISDIR(le16_to_cpu(node_blk->i.i_mode));
+	u16 type = le16_to_cpu(node_blk->i.i_mode);
 	int ret = 0;
 
 	if ((node_blk->i.i_inline & F2FS_INLINE_DATA)) {
 		DBG(3, "ino[0x%x] has inline data!\n", nid);
 		/* recover from inline data */
-		dev_write_dump(((unsigned char *)node_blk) + INLINE_DATA_OFFSET,
+#if !defined(__MINGW32__)
+		if (S_ISLNK(type) && c.preserve_symlinks) {
+			dev_write_symlink(inline_data_addr(node_blk), c.dump_sym_target_len);
+		} else
+#endif
+		{
+			dev_write_dump(inline_data_addr(node_blk),
 						0, MAX_INLINE_DATA(node_blk));
+		}
 		ret = -1;
 		goto dump_xattr;
 	}
@@ -504,7 +532,7 @@ static int dump_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 	/* check data blocks in inode */
 	for (i = 0; i < ADDRS_PER_INODE(&node_blk->i); i++, ofs++)
 		dump_data_blk(sbi, ofs * F2FS_BLKSIZE, le32_to_cpu(
-			node_blk->i.i_addr[get_extra_isize(node_blk) + i]), is_dir);
+			node_blk->i.i_addr[get_extra_isize(node_blk) + i]), type);
 
 	/* check node blocks in inode */
 	for (i = 0; i < 5; i++) {
@@ -513,26 +541,26 @@ static int dump_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs,
-					is_dir);
+					type);
 		else if (i == 2 || i == 3)
 			dump_node_blk(sbi, TYPE_INDIRECT_NODE,
 					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs,
-					is_dir);
+					type);
 		else if (i == 4)
 			dump_node_blk(sbi, TYPE_DOUBLE_INDIRECT_NODE,
 					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs,
-					is_dir);
+					type);
 		else
 			ASSERT(0);
 	}
 	/* last block in extent cache */
 	print_extent(true);
 dump_xattr:
-	dump_xattr(sbi, node_blk, is_dir);
+	dump_xattr(sbi, node_blk, type);
 	return ret;
 }
 
@@ -553,6 +581,23 @@ static void dump_file(struct f2fs_sb_info *sbi, struct node_info *ni,
 	ASSERT(ret >= 0);
 
 	close(c.dump_fd);
+}
+
+static void dump_link(struct f2fs_sb_info *sbi, struct node_info *ni,
+				struct f2fs_node *node_blk, char *name)
+{
+#if defined(__MINGW32__)
+	dump_file(sbi, ni, node_blk, name);
+#else
+	struct f2fs_inode *inode = &node_blk->i;
+	int len = le64_to_cpu(inode->i_size);
+
+	if (!c.preserve_symlinks)
+		return dump_file(sbi, ni, node_blk, name);
+	c.dump_symlink = name;
+	c.dump_sym_target_len = len + 1;
+	dump_inode_blk(sbi, ni->ino, node_blk);
+#endif
 }
 
 static void dump_folder(struct f2fs_sb_info *sbi, struct node_info *ni,
@@ -580,17 +625,23 @@ static void dump_folder(struct f2fs_sb_info *sbi, struct node_info *ni,
 
 static int dump_filesystem(struct f2fs_sb_info *sbi, struct node_info *ni,
 				struct f2fs_node *node_blk, int force, char *base_path,
-				bool is_base, bool allow_folder)
+				bool is_base, bool allow_folder, char *dirent_name)
 {
 	struct f2fs_inode *inode = &node_blk->i;
 	u32 imode = le16_to_cpu(inode->i_mode);
-	u32 namelen = le32_to_cpu(inode->i_namelen);
-	char name[F2FS_NAME_LEN + 1] = {0};
+	u32 ilinks = le32_to_cpu(inode->i_links);
+	u32 i_namelen = le32_to_cpu(inode->i_namelen);
+	char i_name[F2FS_NAME_LEN + 1] = {0};
+	char *name = NULL;
 	char path[1024] = {0};
 	char ans[255] = {0};
 	int is_encrypted = file_is_encrypt(inode);
 	int is_root = sbi->root_ino_num == ni->nid;
 	int ret;
+
+	if (!S_ISDIR(imode) && ilinks != 1) {
+		MSG(force, "Warning: Hard link detected. Dumped files may be duplicated\n");
+	}
 
 	if (is_encrypted) {
 		MSG(force, "File is encrypted\n");
@@ -601,8 +652,12 @@ static int dump_filesystem(struct f2fs_sb_info *sbi, struct node_info *ni,
 		MSG(force, "Not a valid file type\n\n");
 		return -1;
 	}
-	if (!is_root && (namelen == 0 || namelen > F2FS_NAME_LEN)) {
+	if (!is_root && !dirent_name && (i_namelen == 0 || i_namelen > F2FS_NAME_LEN)) {
 		MSG(force, "Wrong name info\n\n");
+		return -1;
+	}
+	if (le32_to_cpu(inode->i_flags) & F2FS_NODUMP_FL) {
+		MSG(force, "File has nodump flag\n\n");
 		return -1;
 	}
 	base_path = base_path ?: "./lost_found";
@@ -614,7 +669,7 @@ static int dump_filesystem(struct f2fs_sb_info *sbi, struct node_info *ni,
 		return dump_inode_blk(sbi, ni->ino, node_blk);
 
 	printf("Do you want to dump this %s into %s/? [Y/N] ",
-			S_ISREG(imode) || S_ISLNK(imode) ? "file" : "folder",
+			S_ISDIR(imode) ? "folder" : "file",
 			base_path);
 	ret = scanf("%s", ans);
 	ASSERT(ret >= 0);
@@ -635,23 +690,34 @@ dump:
 
 		/* make a file */
 		if (!is_root) {
-			strncpy(name, (const char *)inode->i_name, namelen);
-			name[namelen] = 0;
+			/* The i_name name may be out of date. Prefer dirent_name */
+			if (dirent_name) {
+				name = dirent_name;
+			} else  {
+				strncpy(i_name, (const char *)inode->i_name, i_namelen);
+				i_name[i_namelen] = 0;
+				name = i_name;
+			}
 		}
 
-		if (S_ISREG(imode) || S_ISLNK(imode)) {
+		if (S_ISREG(imode)) {
 			dump_file(sbi, ni, node_blk, name);
-		} else {
+		} else if (S_ISDIR(imode)) {
 			dump_folder(sbi, ni, node_blk, name, is_root);
+		} else {
+			dump_link(sbi, ni, node_blk, name);
 		}
 
 #if !defined(__MINGW32__)
 		/* fix up mode/owner */
 		if (c.preserve_perms) {
-			if (is_root)
+			if (is_root) {
+				name = i_name;
 				strncpy(name, ".", 2);
-			ASSERT(chmod(name, imode) == 0);
-			ASSERT(chown(name, inode->i_uid, inode->i_gid) == 0);
+			}
+			if (!S_ISLNK(imode))
+				ASSERT(chmod(name, imode) == 0);
+			ASSERT(lchown(name, inode->i_uid, inode->i_gid) == 0);
 		}
 #endif
 		if (is_base)
@@ -660,7 +726,7 @@ dump:
 	return 0;
 }
 
-static bool is_sit_bitmap_set(struct f2fs_sb_info *sbi, u32 blk_addr)
+bool is_sit_bitmap_set(struct f2fs_sb_info *sbi, u32 blk_addr)
 {
 	struct seg_entry *se;
 	u32 offset;
@@ -705,7 +771,7 @@ void dump_node_scan_disk(struct f2fs_sb_info *sbi, nid_t nid)
 	free(node_blk);
 }
 
-int dump_node(struct f2fs_sb_info *sbi, nid_t nid, int force, char *base_path, int base, int allow_folder)
+int dump_node(struct f2fs_sb_info *sbi, nid_t nid, int force, char *base_path, int base, int allow_folder, char *dirent_name)
 {
 	struct node_info ni;
 	struct f2fs_node *node_blk;
@@ -740,7 +806,7 @@ int dump_node(struct f2fs_sb_info *sbi, nid_t nid, int force, char *base_path, i
 			print_node_info(sbi, node_blk, force);
 
 		if (ni.ino == ni.nid)
-			ret = dump_filesystem(sbi, &ni, node_blk, force, base_path, base, allow_folder);
+			ret = dump_filesystem(sbi, &ni, node_blk, force, base_path, base, allow_folder, dirent_name);
 	} else {
 		print_node_info(sbi, node_blk, force);
 		MSG(force, "Invalid (i)node block\n\n");

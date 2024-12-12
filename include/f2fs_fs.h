@@ -45,6 +45,7 @@
 #define WITH_RESIZE
 #define WITH_SLOAD
 #define WITH_LABEL
+#define WITH_INJECT
 #endif
 
 #include <inttypes.h>
@@ -427,6 +428,7 @@ enum f2fs_config_func {
 	RESIZE,
 	SLOAD,
 	LABEL,
+	INJECT,
 };
 
 enum default_set {
@@ -659,9 +661,11 @@ enum {
 /*
  * On-disk inode flags (f2fs_inode::i_flags)
  */
+#define F2FS_COMPR_FL			0x00000004 /* Compress file */
+#define F2FS_NODUMP_FL			0x00000040 /* do not dump file */
 #define F2FS_IMMUTABLE_FL		0x00000010 /* Immutable file */
 #define F2FS_NOATIME_FL			0x00000080 /* do not update atime */
-
+#define F2FS_CASEFOLD_FL		0x40000000 /* Casefolded file */
 
 #define F2FS_ENC_UTF8_12_1	1
 #define F2FS_ENC_STRICT_MODE_FL	(1 << 0)
@@ -925,10 +929,10 @@ static_assert(sizeof(struct node_footer) == 24, "");
 				- sizeof(struct node_footer)) / sizeof(__le32))
 #define CUR_ADDRS_PER_INODE(inode)	(DEF_ADDRS_PER_INODE - \
 					__get_extra_isize(inode))
-#define ADDRS_PER_INODE(i)	addrs_per_inode(i)
+#define ADDRS_PER_INODE(i)	addrs_per_page(i, true)
 /* Address Pointers in a Direct Block */
 #define DEF_ADDRS_PER_BLOCK ((F2FS_BLKSIZE - sizeof(struct node_footer)) / sizeof(__le32))
-#define ADDRS_PER_BLOCK(i)	addrs_per_block(i)
+#define ADDRS_PER_BLOCK(i)	addrs_per_page(i, false)
 /* Node IDs in an Indirect Block */
 #define NIDS_PER_BLOCK    ((F2FS_BLKSIZE - sizeof(struct node_footer)) / sizeof(__le32))
 
@@ -984,9 +988,7 @@ static_assert(sizeof(struct node_footer) == 24, "");
 
 #define file_is_encrypt(fi)      ((fi)->i_advise & FADVISE_ENCRYPT_BIT)
 #define file_enc_name(fi)        ((fi)->i_advise & FADVISE_ENC_NAME_BIT)
-
-#define F2FS_CASEFOLD_FL	0x40000000 /* Casefolded file */
-#define IS_CASEFOLDED(dir)     ((dir)->i_flags & F2FS_CASEFOLD_FL)
+#define IS_CASEFOLDED(dir)     ((dir)->i_flags & cpu_to_le32(F2FS_CASEFOLD_FL))
 
 /*
  * fsck i_compr_blocks counting helper
@@ -1003,10 +1005,6 @@ struct f2fs_compr_blk_cnt {
 };
 #define CHEADER_PGOFS_NONE ((u32)-(1 << MAX_COMPRESS_LOG_SIZE))
 
-/*
- * inode flags
- */
-#define F2FS_COMPR_FL		0x00000004 /* Compress file */
 /*
  * On disk layout is
  * struct f2fs_inode
@@ -1443,6 +1441,13 @@ enum {
 	SSR
 };
 
+/* invalid sb types */
+#define SB_FORCE_STOP		0x1	/* s_stop_reason is set */
+#define SB_ABNORMAL_STOP	0x2	/* s_stop_reason is set except shutdown */
+#define SB_FS_ERRORS		0x4	/* s_erros is set */
+#define SB_INVALID		0x8	/* sb is invalid */
+#define SB_NEED_FIX (SB_ABNORMAL_STOP | SB_FS_ERRORS | SB_INVALID)
+
 #define MAX_CACHE_SUMS			8
 
 struct f2fs_configuration {
@@ -1478,6 +1483,8 @@ struct f2fs_configuration {
 	uint16_t s_encoding_flags;
 	int32_t kd;
 	int32_t dump_fd;
+	char *dump_symlink;
+	int dump_sym_target_len;
 	struct device_info devices[MAX_DEVICES];
 	int ndevs;
 	char *extension_list[2];
@@ -1494,9 +1501,7 @@ struct f2fs_configuration {
 	int force;
 	int defset;
 	int bug_on;
-	int force_stop;
-	int abnormal_stop;
-	int fs_errors;
+	unsigned int invalid_sb;
 	int bug_nat_bits;
 	bool quota_fixed;
 	int alloc_failed;
@@ -1540,7 +1545,10 @@ struct f2fs_configuration {
 	struct selinux_opt seopt_file[8];
 	int nr_opt;
 #endif
+
+	/* dump parameters */
 	int preserve_perms;
+	int preserve_symlinks;
 
 	/* resize parameters */
 	int safe_resize;
@@ -1569,8 +1577,7 @@ struct f2fs_configuration {
 extern int utf8_to_utf16(char *, const char *, size_t, size_t);
 extern int utf16_to_utf8(char *, const char *, size_t, size_t);
 extern int log_base_2(uint32_t);
-extern unsigned int addrs_per_inode(struct f2fs_inode *);
-extern unsigned int addrs_per_block(struct f2fs_inode *);
+extern unsigned int addrs_per_page(struct f2fs_inode *, bool);
 extern unsigned int f2fs_max_file_offset(struct f2fs_inode *);
 extern __u32 f2fs_inode_chksum(struct f2fs_node *);
 extern __u32 f2fs_checkpoint_chksum(struct f2fs_checkpoint *);
@@ -1614,6 +1621,9 @@ extern int dev_readahead(__u64, size_t UNUSED(len));
 extern int dev_write(void *, __u64, size_t);
 extern int dev_write_block(void *, __u64);
 extern int dev_write_dump(void *, __u64, size_t);
+#if !defined(__MINGW32__)
+extern int dev_write_symlink(char *, size_t);
+#endif
 /* All bytes in the buffer must be 0 use dev_fill(). */
 extern int dev_fill(void *, __u64, size_t);
 extern int dev_fill_block(void *, __u64);
@@ -1732,6 +1742,8 @@ blk_zone_cond_str(struct blk_zone *blkz)
  * Handle kernel zone capacity support
  */
 #define blk_zone_empty(z)	(blk_zone_cond(z) == BLK_ZONE_COND_EMPTY)
+#define blk_zone_open(z)	(blk_zone_cond(z) == BLK_ZONE_COND_IMP_OPEN ||	\
+				 blk_zone_cond(z) == BLK_ZONE_COND_EXP_OPEN)
 #define blk_zone_sector(z)	(z)->start
 #define blk_zone_length(z)	(z)->len
 #define blk_zone_wp_sector(z)	(z)->wp

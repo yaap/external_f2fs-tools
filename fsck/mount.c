@@ -469,6 +469,7 @@ void print_raw_sb_info(struct f2fs_super_block *sb)
 	char uuid[40];
 	char encrypt_pw_salt[40];
 #endif
+	int i;
 
 	if (c.layout)
 		goto printout;
@@ -536,6 +537,13 @@ printout:
 	uuid_unparse(sb->encrypt_pw_salt, encrypt_pw_salt);
 	DISP_raw_str("%-.36s", encrypt_pw_salt);
 #endif
+
+	for (i = 0; i < MAX_DEVICES; i++) {
+		if (!sb->devs[i].path[0])
+			break;
+		DISP_str("%s", sb, devs[i].path);
+		DISP_u32(sb, devs[i].total_segments);
+	}
 
 	DISP_u32(sb, qf_ino[USRQUOTA]);
 	DISP_u32(sb, qf_ino[GRPQUOTA]);
@@ -693,7 +701,7 @@ void print_sb_stop_reason(struct f2fs_super_block *sb)
 	u8 *reason = sb->s_stop_reason;
 	int i;
 
-	if (!c.force_stop)
+	if (!(c.invalid_sb & SB_FORCE_STOP))
 		return;
 
 	MSG(0, "Info: checkpoint stop reason: ");
@@ -731,7 +739,7 @@ void print_sb_errors(struct f2fs_super_block *sb)
 	u8 *errors = sb->s_errors;
 	int i;
 
-	if (!c.fs_errors)
+	if (!(c.invalid_sb & SB_FS_ERRORS))
 		return;
 
 	MSG(0, "Info: fs errors: ");
@@ -1163,9 +1171,12 @@ int validate_super_block(struct f2fs_sb_info *sbi, enum SB_ADDR sb_addr)
 				VERSION_NAME_LEN);
 		get_kernel_version(c.init_version);
 
-		c.force_stop = is_checkpoint_stop(sbi->raw_super, false);
-		c.abnormal_stop = is_checkpoint_stop(sbi->raw_super, true);
-		c.fs_errors = is_inconsistent_error(sbi->raw_super);
+		if (is_checkpoint_stop(sbi->raw_super, false))
+			c.invalid_sb |= SB_FORCE_STOP;
+		if (is_checkpoint_stop(sbi->raw_super, true))
+			c.invalid_sb |= SB_ABNORMAL_STOP;
+		if (is_inconsistent_error(sbi->raw_super))
+			c.invalid_sb |= SB_FS_ERRORS;
 
 		MSG(0, "Info: MKFS version\n  \"%s\"\n", c.init_version);
 		MSG(0, "Info: FSCK version\n  from \"%s\"\n    to \"%s\"\n",
@@ -1178,6 +1189,7 @@ int validate_super_block(struct f2fs_sb_info *sbi, enum SB_ADDR sb_addr)
 
 	free(sbi->raw_super);
 	sbi->raw_super = NULL;
+	c.invalid_sb |= SB_INVALID;
 	MSG(0, "\tCan't find a valid F2FS superblock at 0x%x\n", sb_addr);
 
 	return -EINVAL;
@@ -1212,7 +1224,7 @@ int init_sb_info(struct f2fs_sb_info *sbi)
 			c.devices[i].path = strdup((char *)sb->devs[i].path);
 			if (get_device_info(i))
 				ASSERT(0);
-		} else {
+		} else if (c.func != INJECT) {
 			ASSERT(!strcmp((char *)sb->devs[i].path,
 						(char *)c.devices[i].path));
 		}
@@ -1448,7 +1460,7 @@ static int f2fs_should_proceed(struct f2fs_super_block *sb, u32 flag)
 		if (flag & CP_FSCK_FLAG ||
 			flag & CP_DISABLED_FLAG ||
 			flag & CP_QUOTA_NEED_FSCK_FLAG ||
-			c.abnormal_stop || c.fs_errors ||
+			c.invalid_sb & SB_NEED_FIX ||
 			(exist_qf_ino(sb) && (flag & CP_ERROR_FLAG))) {
 			c.fix_on = 1;
 		} else if (!c.preen_mode) {
@@ -3426,6 +3438,32 @@ void write_checkpoints(struct f2fs_sb_info *sbi)
 	write_checkpoint(sbi);
 }
 
+void write_raw_cp_blocks(struct f2fs_sb_info *sbi,
+			 struct f2fs_checkpoint *cp, int which)
+{
+	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
+	uint32_t crc;
+	block_t cp_blkaddr;
+	int ret;
+
+	crc = f2fs_checkpoint_chksum(cp);
+	*((__le32 *)((unsigned char *)cp + get_cp(checksum_offset))) =
+							cpu_to_le32(crc);
+
+	cp_blkaddr = get_sb(cp_blkaddr);
+	if (which == 2)
+		cp_blkaddr += 1 << get_sb(log_blocks_per_seg);
+
+	/* write the first cp block in this CP pack */
+	ret = dev_write_block(cp, cp_blkaddr);
+	ASSERT(ret >= 0);
+
+	/* write the second cp block in this CP pack */
+	cp_blkaddr += get_cp(cp_pack_total_block_count) - 1;
+	ret = dev_write_block(cp, cp_blkaddr);
+	ASSERT(ret >= 0);
+}
+
 void build_nat_area_bitmap(struct f2fs_sb_info *sbi)
 {
 	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_HOT_DATA);
@@ -4018,7 +4056,7 @@ int f2fs_do_mount(struct f2fs_sb_info *sbi)
 	}
 	cp = F2FS_CKPT(sbi);
 
-	if (c.func != FSCK && c.func != DUMP &&
+	if (c.func != FSCK && c.func != DUMP && c.func != INJECT &&
 		!is_set_ckpt_flags(F2FS_CKPT(sbi), CP_UMOUNT_FLAG)) {
 		ERR_MSG("Mount unclean image to replay log first\n");
 		return -1;

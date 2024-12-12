@@ -633,18 +633,6 @@ err:
 	return -EINVAL;
 }
 
-static bool is_sit_bitmap_set(struct f2fs_sb_info *sbi, u32 blk_addr)
-{
-	struct seg_entry *se;
-	u32 offset;
-
-	se = get_seg_entry(sbi, GET_SEGNO(sbi, blk_addr));
-	offset = OFFSET_IN_SEG(sbi, blk_addr);
-
-	return f2fs_test_bit(offset,
-			(const char *)se->cur_valid_map) != 0;
-}
-
 int fsck_chk_root_inode(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_node *node_blk;
@@ -924,14 +912,14 @@ void fsck_chk_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 		 * the node tree.  Thus, it must be fixed unconditionally
 		 * in the memory (node_blk).
 		 */
-		node_blk->i.i_flags &= ~cpu_to_le32(F2FS_COMPR_FL);
+		i_flags &= ~F2FS_COMPR_FL;
 		compressed = false;
 		if (c.fix_on) {
 			need_fix = 1;
 			FIX_MSG("[0x%x] i_flags=0x%x -> 0x%x",
-					nid, i_flags, node_blk->i.i_flags);
+					nid, node_blk->i.i_flags, i_flags);
 		}
-		i_flags &= ~F2FS_COMPR_FL;
+		node_blk->i.i_flags = cpu_to_le32(i_flags);
 	}
 check_next:
 	memset(&child, 0, sizeof(child));
@@ -1057,7 +1045,8 @@ check_next:
 		ASSERT_MSG("[0x%x] unexpected casefold flag", nid);
 		if (c.fix_on) {
 			FIX_MSG("ino[0x%x] clear casefold flag", nid);
-			node_blk->i.i_flags &= ~cpu_to_le32(F2FS_CASEFOLD_FL);
+			i_flags &= ~F2FS_CASEFOLD_FL;
+			node_blk->i.i_flags = cpu_to_le32(i_flags);
 			need_fix = 1;
 		}
 	}
@@ -1093,10 +1082,7 @@ check_next:
 			}
 		}
 		if (!(node_blk->i.i_inline & F2FS_DATA_EXIST)) {
-			char buf[MAX_INLINE_DATA(node_blk)];
-			memset(buf, 0, MAX_INLINE_DATA(node_blk));
-
-			if (memcmp(buf, inline_data_addr(node_blk),
+			if (!is_zeroed(inline_data_addr(node_blk),
 						MAX_INLINE_DATA(node_blk))) {
 				ASSERT_MSG("[0x%x] junk inline data", nid);
 				if (c.fix_on) {
@@ -1651,7 +1637,7 @@ static void print_dentry(struct f2fs_sb_info *sbi, __u8 *name,
 			d = d->next;
 		}
 		printf("/%s", new);
-		if (dump_node(sbi, le32_to_cpu(dentry[idx].ino), 0, NULL, 0, 0))
+		if (dump_node(sbi, le32_to_cpu(dentry[idx].ino), 0, NULL, 0, 0, NULL))
 			printf("\33[2K\r");
 	} else {
 		for (i = 1; i < depth; i++)
@@ -3366,7 +3352,7 @@ static void fix_wp_sit_alignment(struct f2fs_sb_info *sbi)
 		if (!c.devices[i].path)
 			break;
 		if (c.devices[i].zoned_model != F2FS_ZONED_HM)
-			break;
+			continue;
 
 		wpd.dev_index = i;
 		if (f2fs_report_zones(i, chk_and_fix_wp_with_sit, &wpd)) {
@@ -3632,7 +3618,7 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 		if (!strcasecmp(ans, "y")) {
 			for (i = 0; i < fsck->nr_nat_entries; i++) {
 				if (f2fs_test_bit(i, fsck->nat_area_bitmap))
-					dump_node(sbi, i, 1, NULL, 1, 0);
+					dump_node(sbi, i, 1, NULL, 1, 0, NULL);
 			}
 		}
 	}
@@ -3676,13 +3662,13 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 			write_checkpoints(sbi);
 		}
 
-		if (c.abnormal_stop)
+		if (c.invalid_sb & SB_ABNORMAL_STOP)
 			memset(sb->s_stop_reason, 0, MAX_STOP_REASON);
 
-		if (c.fs_errors)
+		if (c.invalid_sb & SB_FS_ERRORS)
 			memset(sb->s_errors, 0, MAX_F2FS_ERRORS);
 
-		if (c.abnormal_stop || c.fs_errors)
+		if (c.invalid_sb & SB_NEED_FIX)
 			update_superblock(sb, SB_MASK_ALL);
 
 		/* to return FSCK_ERROR_CORRECTED */

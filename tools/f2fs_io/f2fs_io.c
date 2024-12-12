@@ -182,16 +182,19 @@ static void do_fsync(int argc, char **argv, const struct cmd_desc *cmd)
 static void do_set_verity(int argc, char **argv, const struct cmd_desc *cmd)
 {
 	int ret, fd;
+	struct fsverity_enable_arg args = {.version = 1};
+
+	args.hash_algorithm = FS_VERITY_HASH_ALG_SHA256;
+	args.block_size = 4096;
 
 	if (argc != 2) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
 	}
+	fd = open(argv[1], O_RDONLY);
 
-	fd = open(argv[1], O_RDWR);
-
-	ret = ioctl(fd, FS_IOC_ENABLE_VERITY);
+	ret = ioctl(fd, FS_IOC_ENABLE_VERITY, &args);
 	if (ret < 0) {
 		perror("FS_IOC_ENABLE_VERITY");
 		exit(1);
@@ -539,7 +542,7 @@ static void do_fallocate(int argc, char **argv, const struct cmd_desc *cmd)
 	if (!strcmp(argv[0], "1"))
 		mode |= FALLOC_FL_KEEP_SIZE;
 
-	offset = atoi(argv[1]);
+	offset = atoll(argv[1]);
 	length = atoll(argv[2]);
 
 	fd = xopen(argv[3], O_RDWR, 0);
@@ -867,8 +870,15 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	if (!do_mmap) {
 		for (i = 0; i < count; i++) {
 			ret = pread(fd, buf, buf_size, offset + buf_size * i);
-			if (ret != buf_size)
+			if (ret != buf_size) {
+				printf("pread expected: %"PRIu64", readed: %"PRIu64"\n",
+						buf_size, ret);
+				if (ret > 0) {
+					read_cnt += ret;
+					memcpy(print_buf, buf, print_bytes);
+				}
 				break;
+			}
 
 			read_cnt += ret;
 			if (i == 0)
@@ -957,7 +967,7 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define fiemap_desc "get block address in file"
 #define fiemap_help					\
-"f2fs_io fiemap [offset in 4kb] [count] [file_path]\n\n"\
+"f2fs_io fiemap [offset in 4kb] [count in 4kb] [file_path]\n\n"\
 
 #if defined(HAVE_LINUX_FIEMAP_H) && defined(HAVE_LINUX_FS_H)
 static void do_fiemap(int argc, char **argv, const struct cmd_desc *cmd)
@@ -1546,9 +1556,9 @@ static void do_move_range(int argc, char **argv, const struct cmd_desc *cmd)
 
 	fd = xopen(argv[1], O_RDWR, 0);
 	range.dst_fd = xopen(argv[2], O_RDWR | O_CREAT, 0644);
-	range.pos_in = atoi(argv[3]);
-	range.pos_out = atoi(argv[4]);
-	range.len = atoi(argv[5]);
+	range.pos_in = atoll(argv[3]);
+	range.pos_out = atoll(argv[4]);
+	range.len = atoll(argv[5]);
 
 	ret = ioctl(fd, F2FS_IOC_MOVE_RANGE, &range);
 	if (ret < 0)
@@ -1726,7 +1736,7 @@ static void do_lseek(int argc, char **argv, const struct cmd_desc *cmd)
 		exit(1);
 	}
 
-	offset = atoi(argv[2]);
+	offset = atoll(argv[2]);
 
 	if (!strcmp(argv[1], "set"))
 		whence = SEEK_SET;
@@ -1746,7 +1756,7 @@ static void do_lseek(int argc, char **argv, const struct cmd_desc *cmd)
 	ret = lseek(fd, offset, whence);
 	if (ret < 0)
 		die_errno("lseek failed");
-	printf("returned offset=%ld\n", ret);
+	printf("returned offset=%lld\n", (long long)ret);
 	exit(0);
 }
 

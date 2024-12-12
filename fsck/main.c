@@ -29,6 +29,15 @@
 #include <stdbool.h>
 #include "quotaio.h"
 #include "compress.h"
+#ifdef WITH_INJECT
+#include "inject.h"
+#else
+static void inject_usage(void)
+{
+	MSG(0, "\ninject.f2fs not supported\n");
+	exit(1);
+}
+#endif
 
 struct f2fs_fsck gfsck;
 
@@ -97,6 +106,12 @@ void dump_usage()
 	MSG(0, "  -S sparse_mode\n");
 	MSG(0, "  -a [SSA dump segno from #1~#2 (decimal), for all 0~-1]\n");
 	MSG(0, "  -b blk_addr (in 4KB)\n");
+	MSG(0, "  -r dump out from the root inode\n");
+	MSG(0, "  -f do not prompt before dumping\n");
+	MSG(0, "  -y alias for -f\n");
+	MSG(0, "  -o dump inodes to the given path\n");
+	MSG(0, "  -P preserve mode/owner/group for dumped inode\n");
+	MSG(0, "  -L Preserves symlinks. Otherwise symlinks are dumped as regular files.\n");
 	MSG(0, "  -V print the version number and exit\n");
 
 	exit(1);
@@ -166,7 +181,7 @@ void label_usage()
 	exit(1);
 }
 
-static int is_digits(char *optarg)
+int is_digits(char *optarg)
 {
 	unsigned int i;
 
@@ -190,6 +205,8 @@ static void error_out(char *prog)
 		sload_usage();
 	else if (!strcmp("f2fslabel", prog))
 		label_usage();
+	else if (!strcmp("inject.f2fs", prog))
+		inject_usage();
 	else
 		MSG(0, "\nWrong program.\n");
 }
@@ -384,7 +401,7 @@ void f2fs_parse_options(int argc, char *argv[])
 		}
 	} else if (!strcmp("dump.f2fs", prog)) {
 #ifdef WITH_DUMP
-		const char *option_string = "d:fi:I:n:Mo:Prs:Sa:b:Vy";
+		const char *option_string = "d:fi:I:n:LMo:Prs:Sa:b:Vy";
 		static struct dump_option dump_opt = {
 			.nid = 0,	/* default root ino */
 			.start_nat = -1,
@@ -474,6 +491,14 @@ void f2fs_parse_options(int argc, char *argv[])
 				err = EWRONG_OPT;
 #else
 				c.preserve_perms = 1;
+#endif
+				break;
+			case 'L':
+#if defined(__MINGW32__)
+				MSG(0, "-L not supported for Windows\n");
+				err = EWRONG_OPT;
+#else
+				c.preserve_symlinks = 1;
 #endif
 				break;
 			case 'V':
@@ -804,6 +829,25 @@ void f2fs_parse_options(int argc, char *argv[])
 			c.vol_label = NULL;
 		}
 #endif /* WITH_LABEL */
+	} else if (!strcmp("inject.f2fs", prog)) {
+#ifdef WITH_INJECT
+		static struct inject_option inject_opt = {
+			.sb = -1,
+			.cp = -1,
+			.nat = -1,
+			.sit = -1,
+			.idx = -1,
+			.nid = -1,
+		};
+
+		err = inject_parse_options(argc, argv, &inject_opt);
+		if (err < 0) {
+			err = EWRONG_OPT;
+		}
+
+		c.func = INJECT;
+		c.private = &inject_opt;
+#endif /* WITH_INJECT */
 	}
 
 	if (err == NOERROR) {
@@ -952,7 +996,7 @@ static void do_dump(struct f2fs_sb_info *sbi)
 	if (opt->blk_addr != -1)
 		dump_info_from_blkaddr(sbi, opt->blk_addr);
 	if (opt->nid)
-		dump_node(sbi, opt->nid, c.force, opt->base_path, 1, 1);
+		dump_node(sbi, opt->nid, c.force, opt->base_path, 1, 1, NULL);
 	if (opt->scan_nid)
 		dump_node_scan_disk(sbi, opt->scan_nid);
 
@@ -1222,6 +1266,12 @@ fsck_again:
 #ifdef WITH_LABEL
 	case LABEL:
 		if (do_label(sbi))
+			goto out_err;
+		break;
+#endif
+#ifdef WITH_INJECT
+	case INJECT:
+		if (do_inject(sbi))
 			goto out_err;
 		break;
 #endif

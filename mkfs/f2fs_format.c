@@ -316,7 +316,7 @@ static int f2fs_prepare_super_block(void)
 					c.blks_per_seg - 1;
 		}
 		if (c.ndevs > 1) {
-			memcpy(sb->devs[i].path, c.devices[i].path, MAX_PATH_LEN);
+			strncpy((char *)sb->devs[i].path, c.devices[i].path, MAX_PATH_LEN);
 			sb->devs[i].total_segments =
 					cpu_to_le32(c.devices[i].total_segments);
 		}
@@ -765,10 +765,6 @@ static int f2fs_write_check_point_pack(void)
 			get_cp(rsvd_segment_count)) *
 			c.overprovision / 100);
 
-	if (!(c.conf_reserved_sections) &&
-	    get_cp(overprov_segment_count) < get_cp(rsvd_segment_count))
-		set_cp(overprov_segment_count, get_cp(rsvd_segment_count));
-
 	/*
 	 * If conf_reserved_sections has a non zero value, overprov_segment_count
 	 * is set to overprov_segment_count + rsvd_segment_count.
@@ -788,8 +784,11 @@ static int f2fs_write_check_point_pack(void)
 		set_cp(overprov_segment_count, get_cp(overprov_segment_count) +
 				get_cp(rsvd_segment_count));
 	 } else {
-		set_cp(overprov_segment_count, get_cp(overprov_segment_count) +
-				overprovision_segment_buffer(sb));
+		/*
+		 * overprov_segment_count must bigger than rsvd_segment_count.
+		 */
+		set_cp(overprov_segment_count, max(get_cp(rsvd_segment_count),
+			get_cp(overprov_segment_count)) + overprovision_segment_buffer(sb));
 	 }
 
 	if (f2fs_get_usable_segments(sb) <= get_cp(overprov_segment_count)) {
@@ -1414,7 +1413,7 @@ static int f2fs_write_qf_inode(int qtype)
 
 	raw_node->i.i_size = cpu_to_le64(1024 * 6);
 	raw_node->i.i_blocks = cpu_to_le64(1 + QUOTA_DATA);
-	raw_node->i.i_flags = F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
+	raw_node->i.i_flags = cpu_to_le32(F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL);
 
 	node_blkaddr = alloc_next_free_block(CURSEG_HOT_NODE);
 	F2FS_NODE_FOOTER(raw_node)->next_blkaddr = cpu_to_le32(node_blkaddr + 1);
