@@ -146,8 +146,6 @@ cc_defaults {
         "f2fs-tools-defaults",
         "make_f2fs_src_files",
     ],
-    host_supported: true,
-    recovery_available: true,
     target: {
         android: {
             static_libs: [
@@ -159,6 +157,16 @@ cc_defaults {
                 "libbase",
             ],
         },
+    },
+}
+
+cc_defaults {
+    name: "make_f2fs_host_defaults",
+    defaults: [
+        "make_f2fs_defaults",
+    ],
+    host_supported: true,
+    target: {
         host: {
             static_libs: [
                 "libf2fs_fmt_host",
@@ -181,15 +189,25 @@ cc_defaults {
 cc_binary {
     name: "make_f2fs",
     defaults: [
+        "make_f2fs_host_defaults",
+    ],
+}
+
+cc_binary {
+    name: "make_f2fs.recovery",
+    defaults: [
         "make_f2fs_defaults",
     ],
+    recovery: true,
+    stem: "make_f2fs",
 }
 
 cc_binary_host {
     name: "make_f2fs_casefold",
     defaults: [
-        "make_f2fs_defaults",
+        "make_f2fs_host_defaults",
     ],
+    recovery_available: true,
     target: {
         host: {
             cflags: ["-DCONF_CASEFOLD", "-DCONF_PROJID"],
@@ -203,8 +221,9 @@ cc_binary_host {
 cc_binary_host {
     name: "make_f2fs.static",
     defaults: [
-        "make_f2fs_defaults",
+        "make_f2fs_host_defaults",
     ],
+    recovery_available: true,
     static_executable: true,
     stl: "libc++_static",
 }
@@ -219,24 +238,41 @@ cc_defaults {
     srcs: ["fsck/fsck.c", "fsck/resize.c", "fsck/defrag.c"],
 }
 
-cc_binary {
-    name: "fsck.f2fs",
+cc_defaults {
+    name: "fsck.f2fs_partition_common_defaults",
     defaults: [
         "f2fs-tools-defaults",
         "fsck_main_src_files",
         "fsck.f2fs_defaults",
     ],
-    host_supported: true,
-    vendor_available: true,
-    recovery_available: true,
     symlinks: ["resize.f2fs", "defrag.f2fs", "dump.f2fs"],
-    vendor_ramdisk_available: true,
     shared_libs: [
         "libext2_uuid",
         "libsparse",
         "libbase",
     ],
     bootstrap: true,
+}
+
+cc_binary {
+    name: "fsck.f2fs",
+    defaults: [
+        "fsck.f2fs_partition_common_defaults",
+    ],
+    host_supported: true,
+    vendor_available: true,
+    vendor_ramdisk_available: true,
+    bootstrap: true,
+}
+
+cc_binary {
+    name: "fsck.f2fs.recovery",
+    defaults: [
+        "fsck.f2fs_partition_common_defaults",
+    ],
+    recovery: true,
+    bootstrap: true,
+    stem: "fsck.f2fs",
 }
 
 cc_binary {
@@ -257,14 +293,12 @@ cc_binary {
     ],
 }
 
-cc_binary {
-    name: "sload_f2fs",
+cc_defaults {
+    name: "sload_f2fs_defaults",
     defaults: [
         "f2fs-tools-defaults",
         "fsck_main_src_files",
     ],
-    host_supported: true,
-    recovery_available: true,
     cflags: ["-DWITH_SLOAD"],
     srcs: [
         "fsck/fsck.c",
@@ -284,6 +318,16 @@ cc_binary {
                 "liblz4",
             ],
         },
+    },
+}
+
+cc_binary {
+    name: "sload_f2fs",
+    defaults: [
+        "sload_f2fs_defaults",
+    ],
+    host_supported: true,
+    target: {
         host: {
             static_libs: [
                 "libext2_uuid",
@@ -298,6 +342,15 @@ cc_binary {
             ],
         },
     },
+}
+
+cc_binary {
+    name: "sload_f2fs.recovery",
+    defaults: [
+        "sload_f2fs_defaults",
+    ],
+    recovery: true,
+    stem: "sload_f2fs",
 }
 
 cc_binary {

@@ -174,6 +174,30 @@ static void do_fsync(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define fdatasync_desc "fdatasync"
+#define fdatasync_help						\
+"f2fs_io fdatasync [file]\n\n"					\
+"fdatasync given the file\n"					\
+
+static void do_fdatasync(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_WRONLY, 0);
+
+	if (fdatasync(fd) != 0)
+		die_errno("fdatasync failed");
+
+	printf("fdatasync a file\n");
+	exit(0);
+}
+
 #define set_verity_desc "Set fs-verity"
 #define set_verity_help					\
 "f2fs_io set_verity [file]\n\n"				\
@@ -185,7 +209,7 @@ static void do_set_verity(int argc, char **argv, const struct cmd_desc *cmd)
 	struct fsverity_enable_arg args = {.version = 1};
 
 	args.hash_algorithm = FS_VERITY_HASH_ALG_SHA256;
-	args.block_size = 4096;
+	args.block_size = F2FS_DEFAULT_BLKSIZE;
 
 	if (argc != 2) {
 		fputs("Excess arguments\n\n", stderr);
@@ -294,7 +318,8 @@ static void do_getflags(int argc, char **argv, const struct cmd_desc *cmd)
 "  casefold\n"							\
 "  compression\n"						\
 "  nocompression\n"						\
-"  noimmutable\n"
+"  immutable\n"							\
+"  nocow\n"
 
 static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -320,8 +345,10 @@ static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 		flag |= FS_COMPR_FL;
 	else if (!strcmp(argv[1], "nocompression"))
 		flag |= FS_NOCOMP_FL;
-	else if (!strcmp(argv[1], "noimmutable"))
-		flag &= ~FS_IMMUTABLE_FL;
+	else if (!strcmp(argv[1], "immutable"))
+		flag |= FS_IMMUTABLE_FL;
+	else if (!strcmp(argv[1], "nocow"))
+		flag |= FS_NOCOW_FL;
 
 	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
 	printf("set a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
@@ -335,6 +362,8 @@ static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 "flag can be\n"							\
 "  compression\n"						\
 "  nocompression\n"						\
+"  immutable\n"							\
+"  nocow\n"
 
 static void do_clearflags(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -358,6 +387,10 @@ static void do_clearflags(int argc, char **argv, const struct cmd_desc *cmd)
 		flag &= ~FS_COMPR_FL;
 	else if (!strcmp(argv[1], "nocompression"))
 		flag &= ~FS_NOCOMP_FL;
+	else if (!strcmp(argv[1], "immutable"))
+		flag &= ~FS_IMMUTABLE_FL;
+	else if (!strcmp(argv[1], "nocow"))
+		flag &= ~FS_NOCOW_FL;
 
 	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
 	printf("clear a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
@@ -626,11 +659,11 @@ static void do_write_with_advice(int argc, char **argv,
 	if (bs > 1024)
 		die("Too big chunk size - limit: 4MB");
 
-	buf_size = bs * 4096;
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
 	offset = atoi(argv[2]) * buf_size;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 	count = atoi(argv[3]);
 
 	if (!strcmp(argv[4], "zero"))
@@ -809,12 +842,15 @@ static void do_write_advice(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define read_desc "read data from file"
 #define read_help					\
-"f2fs_io read [chunk_size in 4kb] [offset in chunk_size] [count] [IO] [print_nbytes] [file_path]\n\n"	\
+"f2fs_io read [chunk_size in 4kb] [offset in chunk_size] [count] [IO] [advice] [print_nbytes] [file_path]\n\n"	\
 "Read data in file_path and print nbytes\n"		\
 "IO can be\n"						\
 "  buffered : buffered IO\n"				\
 "  dio      : direct IO\n"				\
 "  mmap     : mmap IO\n"				\
+"advice can be\n"					\
+" 1 : set sequential|willneed\n"			\
+" 0 : none\n"						\
 
 static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -827,22 +863,22 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	u64 total_time = 0;
 	int flags = 0;
 	int do_mmap = 0;
-	int fd;
+	int fd, advice;
 
-	if (argc != 7) {
+	if (argc != 8) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
 	}
 
 	bs = atoi(argv[1]);
-	if (bs > 1024)
-		die("Too big chunk size - limit: 4MB");
-	buf_size = bs * 4096;
+	if (bs > 256 * 1024)
+		die("Too big chunk size - limit: 1GB");
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
 	offset = atoi(argv[2]) * buf_size;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 
 	count = atoi(argv[3]);
 	if (!strcmp(argv[4], "dio"))
@@ -852,13 +888,24 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	else if (strcmp(argv[4], "buffered"))
 		die("Wrong IO type");
 
-	print_bytes = atoi(argv[5]);
+	print_bytes = atoi(argv[6]);
 	if (print_bytes > buf_size)
 		die("Print_nbytes should be less then chunk_size in kb");
 
 	print_buf = xmalloc(print_bytes);
 
-	fd = xopen(argv[6], O_RDONLY | flags, 0);
+	fd = xopen(argv[7], O_RDONLY | flags, 0);
+
+	advice = atoi(argv[5]);
+	if (advice) {
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_SEQUENTIAL) != 0)
+			die_errno("fadvise failed");
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_WILLNEED) != 0)
+			die_errno("fadvise failed");
+		printf("fadvise SEQUENTIAL|WILLNEED to a file: %s\n", argv[7]);
+	}
 
 	total_time = get_current_us();
 	if (do_mmap) {
@@ -888,8 +935,9 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		read_cnt = count * buf_size;
 		memcpy(print_buf, data, print_bytes);
 	}
-	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, print %u bytes:\n",
-		read_cnt, get_current_us() - total_time, print_bytes);
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, BW = %.Lf MB/s print %u bytes:\n",
+		read_cnt, get_current_us() - total_time,
+		((long double)read_cnt / (get_current_us() - total_time)), print_bytes);
 	printf("%08"PRIx64" : ", offset);
 	for (i = 1; i <= print_bytes; i++) {
 		printf("%02x", print_buf[i - 1]);
@@ -904,24 +952,31 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define randread_desc "random read data from file"
 #define randread_help					\
-"f2fs_io randread [chunk_size in 4kb] [count] [IO] [file_path]\n\n"	\
+"f2fs_io randread [chunk_size in 4kb] [count] [IO] [advise] [file_path]\n\n"	\
 "Do random read data in file_path\n"		\
 "IO can be\n"						\
 "  buffered : buffered IO\n"				\
 "  dio      : direct IO\n"				\
+"  mmap     : mmap IO\n"				\
+"advice can be\n"					\
+" 1 : set random|willneed\n"				\
+" 0 : none\n"						\
 
 static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 {
 	u64 buf_size = 0, ret = 0, read_cnt = 0;
 	u64 idx, end_idx, aligned_size;
 	char *buf = NULL;
-	unsigned bs, count, i;
+	char *data;
+	unsigned bs, count, i, j;
+	u64 total_time = 0, elapsed_time = 0;
 	int flags = 0;
-	int fd;
+	int do_mmap = 0;
+	int fd, advice;
 	time_t t;
 	struct stat stbuf;
 
-	if (argc != 5) {
+	if (argc != 6) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
@@ -930,38 +985,69 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	bs = atoi(argv[1]);
 	if (bs > 1024)
 		die("Too big chunk size - limit: 4MB");
-	buf_size = bs * 4096;
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 
 	count = atoi(argv[2]);
 	if (!strcmp(argv[3], "dio"))
 		flags |= O_DIRECT;
+	else if (!strcmp(argv[3], "mmap"))
+		do_mmap = 1;
 	else if (strcmp(argv[3], "buffered"))
 		die("Wrong IO type");
 
-	fd = xopen(argv[4], O_RDONLY | flags, 0);
+	fd = xopen(argv[5], O_RDONLY | flags, 0);
+
+	advice = atoi(argv[4]);
+	if (advice) {
+		if (posix_fadvise(fd, 0, stbuf.st_size, POSIX_FADV_RANDOM) != 0)
+			die_errno("fadvise failed");
+		if (posix_fadvise(fd, 0, 4096, POSIX_FADV_WILLNEED) != 0)
+			die_errno("fadvise failed");
+		printf("fadvise RANDOM|WILLNEED to a file: %s\n", argv[5]);
+	}
 
 	if (fstat(fd, &stbuf) != 0)
 		die_errno("fstat of source file failed");
 
-	aligned_size = (u64)stbuf.st_size & ~((u64)(4096 - 1));
+	aligned_size = (u64)stbuf.st_size & ~((u64)(F2FS_DEFAULT_BLKSIZE - 1));
 	if (aligned_size < buf_size)
 		die("File is too small to random read");
-	end_idx = (u64)(aligned_size - buf_size) / (u64)4096 + 1;
+	end_idx = (u64)(aligned_size - buf_size) / (u64)F2FS_DEFAULT_BLKSIZE + 1;
+
+	if (do_mmap) {
+		data = mmap(NULL, stbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+		if (data == MAP_FAILED)
+			die("Mmap failed");
+		if (madvise((void *)data, stbuf.st_size, MADV_RANDOM) != 0)
+			die_errno("madvise failed");
+	}
 
 	srand((unsigned) time(&t));
+
+	total_time = get_current_us();
 
 	for (i = 0; i < count; i++) {
 		idx = rand() % end_idx;
 
-		ret = pread(fd, buf, buf_size, 4096 * idx);
-		if (ret != buf_size)
-			break;
-
-		read_cnt += ret;
+		if (!do_mmap) {
+			ret = pread(fd, buf, buf_size, 4096 * idx);
+			if (ret != buf_size)
+				break;
+		} else {
+			for (j = 0; j < bs; j++)
+				*buf = data[4096 * (idx + j)];
+		}
+		read_cnt += buf_size;
 	}
-	printf("Read %"PRIu64" bytes\n", read_cnt);
+	elapsed_time = get_current_us() - total_time;
+
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, avg. latency = %.Lf us, IOPs= %.Lf, BW = %.Lf MB/s\n",
+		read_cnt, elapsed_time,
+		(long double)elapsed_time / count,
+		(long double)count * 1000 * 1000 / elapsed_time,
+		(long double)read_cnt / elapsed_time);
 	exit(0);
 }
 
@@ -985,15 +1071,16 @@ static void do_fiemap(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 
 	memset(fm, 0, sizeof(struct fiemap));
-	start = (u64)atoi(argv[1]) * F2FS_BLKSIZE;
-	length = (u64)atoi(argv[2]) * F2FS_BLKSIZE;
+	start = (u64)atoi(argv[1]) * F2FS_DEFAULT_BLKSIZE;
+	length = (u64)atoi(argv[2]) * F2FS_DEFAULT_BLKSIZE;
 	fm->fm_start = start;
 	fm->fm_length = length;
 
 	fd = xopen(argv[3], O_RDONLY | O_LARGEFILE, 0);
 
 	printf("Fiemap: offset = %"PRIu64" len = %"PRIu64"\n",
-				start / F2FS_BLKSIZE, length / F2FS_BLKSIZE);
+				start / F2FS_DEFAULT_BLKSIZE,
+				length / F2FS_DEFAULT_BLKSIZE);
 	if (ioctl(fd, FS_IOC_FIEMAP, fm) < 0)
 		die_errno("FIEMAP failed");
 
@@ -1173,9 +1260,9 @@ static void do_copy(int argc, char **argv, const struct cmd_desc *cmd)
 		if (ret < 0)
 			die_errno("sendfile failed");
 	} else {
-		char *buf = aligned_xalloc(4096, 4096);
+		char *buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, F2FS_DEFAULT_BLKSIZE);
 
-		while ((ret = xread(src_fd, buf, 4096)) > 0)
+		while ((ret = xread(src_fd, buf, F2FS_DEFAULT_BLKSIZE)) > 0)
 			full_write(dst_fd, buf, ret);
 		free(buf);
 	}
@@ -1808,6 +1895,7 @@ static void do_help(int argc, char **argv, const struct cmd_desc *cmd);
 const struct cmd_desc cmd_list[] = {
 	_CMD(help),
 	CMD(fsync),
+	CMD(fdatasync),
 	CMD(set_verity),
 	CMD(getflags),
 	CMD(setflags),

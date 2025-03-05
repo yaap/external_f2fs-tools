@@ -216,7 +216,7 @@ static int is_valid_ssa_node_blk(struct f2fs_sb_info *sbi, u32 nid,
 		int ret2;
 
 		ssa_blk = GET_SUM_BLKADDR(sbi, segno);
-		ret2 = dev_write_block(sum_blk, ssa_blk);
+		ret2 = dev_write_block(sum_blk, ssa_blk, WRITE_LIFE_NONE);
 		ASSERT(ret2 >= 0);
 	}
 out:
@@ -350,7 +350,7 @@ static int is_valid_ssa_data_blk(struct f2fs_sb_info *sbi, u32 blk_addr,
 		int ret2;
 
 		ssa_blk = GET_SUM_BLKADDR(sbi, segno);
-		ret2 = dev_write_block(sum_blk, ssa_blk);
+		ret2 = dev_write_block(sum_blk, ssa_blk, WRITE_LIFE_NONE);
 		ASSERT(ret2 >= 0);
 	}
 out:
@@ -902,6 +902,7 @@ void fsck_chk_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 	int need_fix = 0;
 	int ret;
 	u32 cluster_size = 1 << node_blk->i.i_log_cluster_size;
+	bool is_aliasing = IS_DEVICE_ALIASING(&node_blk->i);
 
 	if (!compressed)
 		goto check_next;
@@ -1132,6 +1133,33 @@ check_next:
 				addrs_per_blk * NIDS_PER_BLOCK *
 				NIDS_PER_BLOCK) * F2FS_BLKSIZE;
 	}
+
+	if (is_aliasing) {
+		struct extent_info ei;
+
+		get_extent_info(&ei, &node_blk->i.i_ext);
+		for (idx = 0; idx < ei.len; idx++, child.pgofs++) {
+			block_t blkaddr = ei.blk + idx;
+
+			/* check extent info */
+			check_extent_info(&child, blkaddr, 0);
+			ret = fsck_chk_data_blk(sbi, &node_blk->i, blkaddr,
+				&child, (i_blocks == *blk_cnt),	ftype, nid,
+				idx, ni->version, node_blk);
+			if (!ret) {
+				*blk_cnt = *blk_cnt + 1;
+				if (cur_qtype != -1)
+					qf_last_blkofs[cur_qtype] = child.pgofs;
+			} else if (c.fix_on) {
+				node_blk->i.i_ext.len = cpu_to_le32(idx);
+				need_fix = 1;
+				break;
+			}
+		}
+
+		goto check;
+	}
+
 	for (idx = 0; idx < addrs; idx++, child.pgofs++) {
 		block_t blkaddr = le32_to_cpu(node_blk->i.i_addr[ofs + idx]);
 
@@ -1164,11 +1192,11 @@ check_next:
 				child.pgofs - cbc->cheader_pgofs < cluster_size)
 			cbc->cnt++;
 		ret = fsck_chk_data_blk(sbi,
-				IS_CASEFOLDED(&node_blk->i),
+				&node_blk->i,
 				blkaddr,
 				&child, (i_blocks == *blk_cnt),
 				ftype, nid, idx, ni->version,
-				file_is_encrypt(&node_blk->i), node_blk);
+				node_blk);
 		if (blkaddr != le32_to_cpu(node_blk->i.i_addr[ofs + idx]))
 			need_fix = 1;
 		if (!ret) {
@@ -1307,17 +1335,51 @@ skip_blkcnt_fix:
 						nid, i_links, child.links);
 			}
 		}
-		if (child.dots < 2 &&
-				!(node_blk->i.i_inline & F2FS_INLINE_DOTS)) {
-			ASSERT_MSG("ino: 0x%x dots: %u",
-					nid, child.dots);
+		if (child.dot == 0 || child.dotdot == 0) {
+			ASSERT_MSG("ino: 0x%x has no '.' and/or '..' dirents, dot: %u, dotdot: %u",
+					nid, child.dot, child.dotdot);
 			if (c.fix_on) {
-				node_blk->i.i_inline |= F2FS_INLINE_DOTS;
+				umode_t mode = le16_to_cpu(node_blk->i.i_mode);
+
+				ret = convert_inline_dentry(sbi, node_blk,
+								&ni->blk_addr);
+				FIX_MSG("convert inline dentry ino: %u, pino: %u, ret: %d",
+						nid, child_d->p_ino, ret);
+				if (ret)
+					goto skip_dot_fix;
+
+				if (child.dot == 0) {
+					char *name = ".";
+
+					ret = f2fs_add_link(sbi, node_blk,
+						(const unsigned char *)name,
+						1, nid, map_de_type(mode),
+						&ni->blk_addr, 0);
+					FIX_MSG("add missing '%s' dirent in ino: %u, pino: %u, ret:%d",
+						name, nid, child_d->p_ino, ret);
+					if (ret)
+						goto skip_dot_fix;
+				}
+
+				if (child.dotdot == 0) {
+					char *name = "..";
+
+					ret = f2fs_add_link(sbi, node_blk,
+						(const unsigned char *)name,
+						2, child_d->p_ino,
+						map_de_type(mode),
+						&ni->blk_addr, 0);
+					FIX_MSG("add missing '%s' dirent in ino: %u, pino: %u, ret:%d",
+						name, nid, child_d->p_ino, ret);
+					if (ret)
+						goto skip_dot_fix;
+				}
+
 				need_fix = 1;
-				FIX_MSG("Dir: 0x%x set inline_dots", nid);
 			}
 		}
 	}
+skip_dot_fix:
 
 	i_gc_failures = le16_to_cpu(node_blk->i.i_gc_failures);
 
@@ -1362,7 +1424,7 @@ skip_blkcnt_fix:
 	}
 
 	/* drop extent information to avoid potential wrong access */
-	if (need_fix && f2fs_dev_is_writable())
+	if (need_fix && f2fs_dev_is_writable() && !is_aliasing)
 		node_blk->i.i_ext.len = 0;
 
 	if ((c.feature & F2FS_FEATURE_INODE_CHKSUM) &&
@@ -1386,8 +1448,6 @@ skip_blkcnt_fix:
 	}
 
 	if (need_fix && f2fs_dev_is_writable()) {
-		if (c.zoned_model == F2FS_ZONED_HM)
-			node_blk->i.i_ext.len = 0;
 		ret = update_block(sbi, node_blk, &ni->blk_addr, NULL);
 		ASSERT(ret >= 0);
 	}
@@ -1436,11 +1496,9 @@ int fsck_chk_dnode_blk(struct f2fs_sb_info *sbi, struct f2fs_inode *inode,
 		if (!compr_rel && blkaddr == NEW_ADDR && child->pgofs -
 				cbc->cheader_pgofs < cluster_size)
 			cbc->cnt++;
-		ret = fsck_chk_data_blk(sbi, IS_CASEFOLDED(inode),
-			blkaddr, child,
+		ret = fsck_chk_data_blk(sbi, inode, blkaddr, child,
 			le64_to_cpu(inode->i_blocks) == *blk_cnt, ftype,
-			nid, idx, ni->version,
-			file_is_encrypt(inode), node_blk);
+			nid, idx, ni->version, node_blk);
 		if (blkaddr != le32_to_cpu(node_blk->dn.addr[idx]))
 			need_fix = 1;
 		if (!ret) {
@@ -1862,26 +1920,45 @@ static int __chk_dentries(struct f2fs_sb_info *sbi, int casefolded,
 
 		/* Becareful. 'dentry.file_type' is not imode. */
 		if (ftype == F2FS_FT_DIR) {
-			if ((name[0] == '.' && name_len == 1) ||
-				(name[0] == '.' && name[1] == '.' &&
-							name_len == 2)) {
-				ret = __chk_dots_dentries(sbi, casefolded, &dentry[i],
-					child, name, name_len, &filenames[i],
-					enc_name);
-				switch (ret) {
-				case 1:
+			enum dot_type dot_type = NON_DOT;
+
+			if (name[0] == '.' && name_len == 1)
+				dot_type = TYPE_DOT;
+			else if (name[0] == '.' && name[1] == '.' &&
+						name_len == 2)
+				dot_type = TYPE_DOTDOT;
+
+			if (dot_type != NON_DOT) {
+				bool need_del = false;
+
+				DBG(3, "i:%u, dot_type:%u, ino:%u, p:%u, pp:%u\n",
+					i, dot_type, dentry[i].ino,
+					child->p_ino, child->pp_ino);
+
+				ret = __chk_dots_dentries(sbi, casefolded,
+					&dentry[i], child, name, name_len,
+					&filenames[i], enc_name);
+				if (ret)
 					fixed = 1;
-					fallthrough;
-				case 0:
-					child->dots++;
-					break;
+
+				if (dot_type == TYPE_DOT) {
+					if (child->dot == 0)
+						child->dot++;
+					else
+						need_del = true;
+				} else if (dot_type == TYPE_DOTDOT) {
+					if (child->dotdot == 0)
+						child->dotdot++;
+					else
+						need_del = true;
 				}
 
-				if (child->dots > 2) {
-					ASSERT_MSG("More than one '.' or '..', should delete the extra one\n");
+				if (need_del) {
+					ASSERT_MSG("More than one '%s', should delete the extra one, i: %u, ino:%u",
+						dot_type == TYPE_DOT ? "." : "..",
+						i, dentry[i].ino);
 					nullify_dentry(&dentry[i], i,
 						       &filenames[i], &bitmap);
-					child->dots--;
 					fixed = 1;
 				}
 
@@ -2044,12 +2121,15 @@ int fsck_chk_dentry_blk(struct f2fs_sb_info *sbi, int casefolded, u32 blk_addr,
 	return 0;
 }
 
-int fsck_chk_data_blk(struct f2fs_sb_info *sbi, int casefolded,
+int fsck_chk_data_blk(struct f2fs_sb_info *sbi, struct f2fs_inode *inode,
 		u32 blk_addr, struct child_info *child, int last_blk,
 		enum FILE_TYPE ftype, u32 parent_nid, u16 idx_in_node, u8 ver,
-		int enc_name, struct f2fs_node *node_blk)
+		struct f2fs_node *node_blk)
 {
 	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
+	int casefolded = IS_CASEFOLDED(inode);
+	int enc_name = file_is_encrypt(inode);
+	int aliasing = IS_DEVICE_ALIASING(inode);
 
 	/* Is it reserved block? */
 	if (blk_addr == NEW_ADDR) {
@@ -2062,7 +2142,7 @@ int fsck_chk_data_blk(struct f2fs_sb_info *sbi, int casefolded,
 		return -EINVAL;
 	}
 
-	if (is_valid_ssa_data_blk(sbi, blk_addr, parent_nid,
+	if (!aliasing && is_valid_ssa_data_blk(sbi, blk_addr, parent_nid,
 						idx_in_node, ver)) {
 		ASSERT_MSG("summary data block is not valid. [0x%x]",
 						parent_nid);
@@ -2153,7 +2233,8 @@ int fsck_chk_orphan_node(struct f2fs_sb_info *sbi)
 		if (f2fs_dev_is_writable() && c.fix_on &&
 				entry_count != new_entry_count) {
 			F2FS_ORPHAN_BLOCK_FOOTER(new_blk)->entry_count = cpu_to_le32(new_entry_count);
-			ret = dev_write_block(new_blk, start_blk + i);
+			ret = dev_write_block(new_blk, start_blk + i,
+					      WRITE_LIFE_NONE);
 			ASSERT(ret >= 0);
 		}
 		memset(orphan_blk, 0, F2FS_BLKSIZE);
@@ -2569,12 +2650,13 @@ static void fix_checkpoint(struct f2fs_sb_info *sbi)
 	if (sbi->cur_cp == 2)
 		cp_blk_no += 1 << get_sb(log_blocks_per_seg);
 
-	ret = dev_write_block(cp, cp_blk_no++);
+	ret = dev_write_block(cp, cp_blk_no++, WRITE_LIFE_NONE);
 	ASSERT(ret >= 0);
 
 	for (i = 0; i < get_sb(cp_payload); i++) {
 		ret = dev_write_block(((unsigned char *)cp) +
-					(i + 1) * F2FS_BLKSIZE, cp_blk_no++);
+					(i + 1) * F2FS_BLKSIZE, cp_blk_no++,
+					WRITE_LIFE_NONE);
 		ASSERT(ret >= 0);
 	}
 
@@ -2586,7 +2668,8 @@ static void fix_checkpoint(struct f2fs_sb_info *sbi)
 		if (!(flags & CP_UMOUNT_FLAG) && IS_NODESEG(i))
 			continue;
 
-		ret = dev_write_block(curseg->sum_blk, cp_blk_no++);
+		ret = dev_write_block(curseg->sum_blk, cp_blk_no++,
+				      WRITE_LIFE_NONE);
 		ASSERT(ret >= 0);
 	}
 
@@ -2597,7 +2680,7 @@ static void fix_checkpoint(struct f2fs_sb_info *sbi)
 	ret = f2fs_fsync_device();
 	ASSERT(ret >= 0);
 
-	ret = dev_write_block(cp, cp_blk_no++);
+	ret = dev_write_block(cp, cp_blk_no++, WRITE_LIFE_NONE);
 	ASSERT(ret >= 0);
 
 	ret = f2fs_fsync_device();
@@ -3328,9 +3411,11 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 	if (ret) {
 		u64 fill_sects = blk_zone_length(blkz) -
 			(blk_zone_wp_sector(blkz) - blk_zone_sector(blkz));
+		struct seg_entry *se = get_seg_entry(sbi, wp_segno);
 		printf("[FSCK] Finishing zone failed: %s\n", dev->path);
 		ret = dev_fill(NULL, wp_block * F2FS_BLKSIZE,
-			(fill_sects >> log_sectors_per_block) * F2FS_BLKSIZE);
+			(fill_sects >> log_sectors_per_block) * F2FS_BLKSIZE,
+			f2fs_io_type_to_rw_hint(se->type));
 		if (ret)
 			printf("[FSCK] Fill up zone failed: %s\n", dev->path);
 	}
@@ -3646,7 +3731,8 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 					ssa_blk = GET_SUM_BLKADDR(sbi,
 							curseg->segno);
 					ret = dev_write_block(curseg->sum_blk,
-							ssa_blk);
+							ssa_blk,
+							WRITE_LIFE_NONE);
 					ASSERT(ret >= 0);
 				}
 				if (c.roll_forward)

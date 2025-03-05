@@ -28,6 +28,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
+#include <stdbool.h>
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -58,6 +59,19 @@
 #include <kernel/uapi/linux/blkzoned.h>
 #elif defined(HAVE_LINUX_BLKZONED_H)
 #include <linux/blkzoned.h>
+#endif
+
+#ifdef HAVE_LINUX_RW_HINT_H
+#include <linux/rw_hint.h>
+#else
+enum rw_hint {
+	WRITE_LIFE_NOT_SET	= 0,
+	WRITE_LIFE_NONE,
+	WRITE_LIFE_SHORT,
+	WRITE_LIFE_MEDIUM,
+	WRITE_LIFE_LONG,
+	WRITE_LIFE_EXTREME
+};
 #endif
 
 #ifdef HAVE_LIBSELINUX
@@ -106,9 +120,6 @@ typedef uint16_t	u16;
 typedef uint8_t		u8;
 typedef u32		block_t;
 typedef u32		nid_t;
-#ifndef bool
-typedef u8		bool;
-#endif
 typedef unsigned long	pgoff_t;
 typedef unsigned short	umode_t;
 
@@ -444,6 +455,7 @@ struct device_info {
 	uint64_t start_blkaddr;
 	uint64_t end_blkaddr;
 	uint32_t total_segments;
+	char *alias_filename;
 
 	/* to handle zone block devices */
 	int zoned_model;
@@ -666,6 +678,8 @@ enum {
 #define F2FS_IMMUTABLE_FL		0x00000010 /* Immutable file */
 #define F2FS_NOATIME_FL			0x00000080 /* do not update atime */
 #define F2FS_CASEFOLD_FL		0x40000000 /* Casefolded file */
+#define F2FS_DEVICE_ALIAS_FL		0x80000000 /* File for aliasing a device */
+#define IS_DEVICE_ALIASING(fi)	((fi)->i_flags & cpu_to_le32(F2FS_DEVICE_ALIAS_FL))
 
 #define F2FS_ENC_UTF8_12_1	1
 #define F2FS_ENC_STRICT_MODE_FL	(1 << 0)
@@ -698,6 +712,7 @@ enum {
 #define F2FS_FEATURE_CASEFOLD		0x1000
 #define F2FS_FEATURE_COMPRESSION	0x2000
 #define F2FS_FEATURE_RO			0x4000
+#define F2FS_FEATURE_DEVICE_ALIAS	0x8000
 
 #define MAX_NR_FEATURE			32
 
@@ -1429,6 +1444,12 @@ enum FILE_TYPE {
 	F2FS_FT_LAST_FILE_TYPE = F2FS_FT_XATTR,
 };
 
+enum dot_type {
+	NON_DOT,
+	TYPE_DOT,
+	TYPE_DOTDOT
+};
+
 #define LINUX_S_IFMT  00170000
 #define LINUX_S_IFREG  0100000
 #define LINUX_S_IFDIR  0040000
@@ -1520,11 +1541,16 @@ struct f2fs_configuration {
 	time_t fixed_time;
 	int roll_forward;
 	bool need_fsync;
+	bool need_whint;
+	int whint;
+	int aliased_devices;
+	uint32_t aliased_segments;
 
 	/* mkfs parameters */
 	int fake_seed;
 	uint32_t next_free_nid;
 	uint32_t lpf_ino;
+	uint32_t first_alias_ino;
 	uint32_t root_uid;
 	uint32_t root_gid;
 	uint32_t blksize;
@@ -1581,7 +1607,7 @@ extern unsigned int addrs_per_page(struct f2fs_inode *, bool);
 extern unsigned int f2fs_max_file_offset(struct f2fs_inode *);
 extern __u32 f2fs_inode_chksum(struct f2fs_node *);
 extern __u32 f2fs_checkpoint_chksum(struct f2fs_checkpoint *);
-extern int write_inode(struct f2fs_node *, u64);
+extern int write_inode(struct f2fs_node *, u64, enum rw_hint);
 
 extern int get_bits_in_byte(unsigned char n);
 extern int test_and_set_bit_le(u32, u8 *);
@@ -1618,15 +1644,16 @@ extern int dev_readahead(__u64, size_t);
 #else
 extern int dev_readahead(__u64, size_t UNUSED(len));
 #endif
-extern int dev_write(void *, __u64, size_t);
-extern int dev_write_block(void *, __u64);
+extern enum rw_hint f2fs_io_type_to_rw_hint(int);
+extern int dev_write(void *, __u64, size_t, enum rw_hint);
+extern int dev_write_block(void *, __u64, enum rw_hint);
 extern int dev_write_dump(void *, __u64, size_t);
 #if !defined(__MINGW32__)
 extern int dev_write_symlink(char *, size_t);
 #endif
 /* All bytes in the buffer must be 0 use dev_fill(). */
-extern int dev_fill(void *, __u64, size_t);
-extern int dev_fill_block(void *, __u64);
+extern int dev_fill(void *, __u64, size_t, enum rw_hint);
+extern int dev_fill_block(void *, __u64, enum rw_hint);
 
 extern int dev_read_block(void *, __u64);
 extern int dev_reada_block(__u64);

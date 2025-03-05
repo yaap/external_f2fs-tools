@@ -48,7 +48,7 @@ typedef u16	__be16;
 typedef u32	__be32;
 #endif
 
-#define F2FS_BLKSIZE	4096
+#define F2FS_DEFAULT_BLKSIZE	4096
 #define NEW_ADDR	0xFFFFFFFF
 
 #ifndef FS_IOC_GETFLAGS
