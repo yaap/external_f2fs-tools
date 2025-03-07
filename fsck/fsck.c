@@ -942,6 +942,22 @@ check_next:
 		if (f2fs_test_main_bitmap(sbi, ni->blk_addr) == 0) {
 			f2fs_set_main_bitmap(sbi, ni->blk_addr,
 							CURSEG_WARM_NODE);
+
+			if (i_links == 0 && (ftype == F2FS_FT_CHRDEV ||
+				ftype == F2FS_FT_BLKDEV ||
+				ftype == F2FS_FT_FIFO ||
+				ftype == F2FS_FT_SOCK ||
+				ftype == F2FS_FT_SYMLINK ||
+				ftype == F2FS_FT_REG_FILE)) {
+				ASSERT_MSG("ino: 0x%x ftype: %d has i_links: %u",
+							nid, ftype, i_links);
+				if (c.fix_on) {
+					node_blk->i.i_links = cpu_to_le32(1);
+					need_fix = 1;
+					FIX_MSG("ino: 0x%x ftype: %d fix i_links: %u -> 1",
+						nid, ftype, i_links);
+				}
+			}
 			if (i_links > 1 && ftype != F2FS_FT_ORPHAN &&
 					!is_qf_ino(F2FS_RAW_SUPER(sbi), nid)) {
 				/* First time. Create new hard link node */

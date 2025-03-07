@@ -44,8 +44,8 @@ cc_defaults {
     cflags: [
         "-DF2FS_MAJOR_VERSION=1",
         "-DF2FS_MINOR_VERSION=16",
-        "-DF2FS_TOOLS_VERSION=\"1.16.0\"",
         "-DF2FS_TOOLS_DATE=\"2023-04-11\"",
+        "-DF2FS_TOOLS_VERSION=\"1.16.0\"",
         "-DWITH_ANDROID",
         "-D_FILE_OFFSET_BITS=64",
         "-Wall",
@@ -56,9 +56,9 @@ cc_defaults {
         "-Wno-sign-compare",
     ],
     local_include_dirs: [
+        "fsck",
         "include",
         "mkfs",
-        "fsck",
     ],
     target: {
         windows: {
@@ -72,10 +72,10 @@ cc_defaults {
     cflags: ["-DWITH_BLKDISCARD"],
     srcs: [
         "lib/libf2fs.c",
-        "mkfs/f2fs_format.c",
-        "mkfs/f2fs_format_utils.c",
         "lib/libf2fs_zoned.c",
         "lib/nls_utf8.c",
+        "mkfs/f2fs_format.c",
+        "mkfs/f2fs_format_utils.c",
     ],
     static_libs: [
         "libext2_uuid",
@@ -93,22 +93,22 @@ cc_defaults {
 cc_defaults {
     name: "fsck_main_src_files",
     srcs: [
-        "fsck/dir.c",
         "fsck/dict.c",
+        "fsck/dir.c",
+        "fsck/dump.c",
+        "fsck/main.c",
         "fsck/mkquota.c",
+        "fsck/mount.c",
+        "fsck/node.c",
         "fsck/quotaio.c",
         "fsck/quotaio_tree.c",
         "fsck/quotaio_v2.c",
-        "fsck/node.c",
         "fsck/segment.c",
         "fsck/xattr.c",
-        "fsck/main.c",
-        "fsck/mount.c",
         "lib/libf2fs.c",
         "lib/libf2fs_io.c",
         "lib/libf2fs_zoned.c",
         "lib/nls_utf8.c",
-        "fsck/dump.c",
     ],
 }
 
@@ -117,7 +117,7 @@ cc_library_static {
     recovery_available: true,
     defaults: [
         "f2fs-tools-defaults",
-        "libf2fs_src_files"
+        "libf2fs_src_files",
     ],
 }
 
@@ -125,17 +125,17 @@ cc_library_host_static {
     name: "libf2fs_fmt_host",
     defaults: [
         "f2fs-tools-defaults",
-        "libf2fs_src_files"
+        "libf2fs_src_files",
     ],
     target: {
         windows: {
-            include_dirs: [ "external/e2fsprogs/include/mingw" ],
+            include_dirs: ["external/e2fsprogs/include/mingw"],
             cflags: [
                 "-DANDROID_WINDOWS_HOST",
                 "-Wno-typedef-redefinition",
                 "-Wno-unused-parameter",
             ],
-            enabled: true
+            enabled: true,
         },
     },
 }
@@ -152,9 +152,9 @@ cc_defaults {
                 "libf2fs_fmt",
             ],
             shared_libs: [
+                "libbase",
                 "libext2_uuid",
                 "libsparse",
-                "libbase",
             ],
         },
     },
@@ -169,19 +169,19 @@ cc_defaults {
     target: {
         host: {
             static_libs: [
-                "libf2fs_fmt_host",
-                "libext2_uuid",
-                "libsparse",
                 "libbase",
+                "libext2_uuid",
+                "libf2fs_fmt_host",
+                "libsparse",
                 "libz",
             ],
         },
         windows: {
-            include_dirs: [ "external/e2fsprogs/include/mingw" ],
+            include_dirs: ["external/e2fsprogs/include/mingw"],
             cflags: ["-DANDROID_WINDOWS_HOST"],
             ldflags: ["-static"],
             host_ldlibs: ["-lws2_32"],
-            enabled: true
+            enabled: true,
         },
     },
 }
@@ -220,7 +220,10 @@ cc_binary_host {
     recovery_available: true,
     target: {
         host: {
-            cflags: ["-DCONF_CASEFOLD", "-DCONF_PROJID"],
+            cflags: [
+                "-DCONF_CASEFOLD",
+                "-DCONF_PROJID",
+            ],
             dist: {
                 targets: [
                     "dist_files",
@@ -229,7 +232,10 @@ cc_binary_host {
             },
         },
         windows: {
-            cflags: ["-DCONF_CASEFOLD", "-DCONF_PROJID"],
+            cflags: [
+                "-DCONF_CASEFOLD",
+                "-DCONF_PROJID",
+            ],
         },
     },
 }
@@ -250,22 +256,34 @@ cc_defaults {
         "f2fs-tools-defaults",
         "fsck_main_src_files",
     ],
-    cflags: ["-DWITH_RESIZE", "-DWITH_DEFRAG", "-DWITH_DUMP"],
-    srcs: ["fsck/fsck.c", "fsck/resize.c", "fsck/defrag.c"],
+    cflags: [
+        "-DWITH_DEFRAG",
+        "-DWITH_DUMP",
+        "-DWITH_RESIZE",
+    ],
+    srcs: [
+        "fsck/defrag.c",
+        "fsck/fsck.c",
+        "fsck/resize.c",
+    ],
 }
 
 cc_defaults {
     name: "fsck.f2fs_partition_common_defaults",
     defaults: [
         "f2fs-tools-defaults",
-        "fsck_main_src_files",
         "fsck.f2fs_defaults",
+        "fsck_main_src_files",
     ],
-    symlinks: ["resize.f2fs", "defrag.f2fs", "dump.f2fs"],
+    symlinks: [
+        "defrag.f2fs",
+        "dump.f2fs",
+        "resize.f2fs",
+    ],
     shared_libs: [
+        "libbase",
         "libext2_uuid",
         "libsparse",
-        "libbase",
     ],
     bootstrap: true,
 }
@@ -296,8 +314,8 @@ cc_binary {
     stem: "fsck.f2fs",
     defaults: [
         "f2fs-tools-defaults",
-        "fsck_main_src_files",
         "fsck.f2fs_defaults",
+        "fsck_main_src_files",
     ],
     static_executable: true,
     ramdisk: true,
@@ -317,21 +335,21 @@ cc_defaults {
     ],
     cflags: ["-DWITH_SLOAD"],
     srcs: [
+        "fsck/compress.c",
         "fsck/fsck.c",
         "fsck/sload.c",
-        "fsck/compress.c",
-        ],
+    ],
     target: {
         android: {
             shared_libs: [
-                "libext2_uuid",
-                "libsparse",
                 "libbase",
                 "libcrypto",
-                "libselinux",
                 "libcutils",
+                "libext2_uuid",
                 "liblog",
                 "liblz4",
+                "libselinux",
+                "libsparse",
             ],
         },
     },
@@ -346,15 +364,15 @@ cc_binary {
     target: {
         host: {
             static_libs: [
-                "libext2_uuid",
-                "libsparse",
                 "libbase",
                 "libcrypto",
-                "libselinux",
                 "libcutils",
+                "libext2_uuid",
                 "liblog",
-                "libz",
                 "liblz4",
+                "libselinux",
+                "libsparse",
+                "libz",
             ],
         },
     },
@@ -375,8 +393,8 @@ cc_binary {
     cflags: [
         "--static",
         "-U_FORTIFY_SOURCE",
-	"-Wall",
-	"-Werror",
+        "-Wall",
+        "-Werror",
     ],
     srcs: ["tools/check_f2fs.c"],
     product_specific: true,
@@ -385,8 +403,8 @@ cc_binary {
 cc_defaults {
     name: "tools-defaults",
     cflags: [
-	"-Wall",
-	"-Werror",
+        "-Wall",
+        "-Werror",
     ],
     local_include_dirs: [
         "include",
