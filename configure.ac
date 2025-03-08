@@ -182,6 +182,7 @@ AC_TYPE_SIZE_T
 AC_FUNC_GETMNTENT
 AC_CHECK_FUNCS_ONCE([
 	add_key
+	clock_gettime
 	fallocate
 	fsetxattr
 	fstat
@@ -192,8 +193,9 @@ AC_CHECK_FUNCS_ONCE([
 	getuid
 	keyctl
 	memset
+	pread
+	pwrite
 	setmntent
-	clock_gettime
 ])
 
 AS_IF([test "$ac_cv_header_byteswap_h" = "yes"],
