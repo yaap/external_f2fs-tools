@@ -7,14 +7,14 @@ description: "F2FS filesystem tools"
 third_party {
   license_type: RESTRICTED
   last_upgrade_date {
-    year: 2024
-    month: 11
-    day: 13
+    year: 2025
+    month: 3
+    day: 7
   }
   homepage: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git/"
   identifier {
     type: "Git"
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git"
-    version: "ad3736cca5284ca1b1521e5826f81f496d86d0ff"
+    version: "5cef0e5852cce916efb934a6b08374b64b59b6c5"
   }
 }
