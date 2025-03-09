@@ -279,6 +279,12 @@ static int dcache_io_read(long entry, __u64 offset, off_t blk)
 	if (fd < 0)
 		return fd;
 
+#ifdef HAVE_PREAD
+	if (pread(fd, dcache_buf + entry * F2FS_BLKSIZE, F2FS_BLKSIZE, offset) < 0) {
+		MSG(0, "\n pread() fail.\n");
+		return -1;
+	}
+#else
 	if (lseek(fd, offset, SEEK_SET) < 0) {
 		MSG(0, "\n lseek fail.\n");
 		return -1;
@@ -287,6 +293,7 @@ static int dcache_io_read(long entry, __u64 offset, off_t blk)
 		MSG(0, "\n read() fail.\n");
 		return -1;
 	}
+#endif
 	dcache_lastused[entry] = ++dcache_usetick;
 	dcache_valid[entry] = true;
 	dcache_blk[entry] = blk;
@@ -393,10 +400,15 @@ int dev_read_version(void *buf, __u64 offset, size_t len)
 {
 	if (c.sparse_mode)
 		return 0;
+#ifdef HAVE_RPEAD
+	if (pread(c.kd, buf, len, (off_t)offset) < 0)
+		return -1;
+#else
 	if (lseek(c.kd, (off_t)offset, SEEK_SET) < 0)
 		return -1;
 	if (read(c.kd, buf, len) < 0)
 		return -1;
+#endif
 	return 0;
 }
 
@@ -535,10 +547,15 @@ int dev_read(void *buf, __u64 offset, size_t len)
 	fd = __get_device_fd(&offset);
 	if (fd < 0)
 		return fd;
+#ifdef HAVE_PREAD
+	if (pread(fd, buf, len, (off_t)offset) < 0)
+		return -1;
+#else
 	if (lseek(fd, (off_t)offset, SEEK_SET) < 0)
 		return -1;
 	if (read(fd, buf, len) < 0)
 		return -1;
+#endif
 	return 0;
 }
 
@@ -615,9 +632,6 @@ static int __dev_write(void *buf, __u64 offset, size_t len, enum rw_hint whint)
 	if (fd < 0)
 		return fd;
 
-	if (lseek(fd, (off_t)offset, SEEK_SET) < 0)
-		return -1;
-
 #if ! defined(__MINGW32__)
 	if (c.need_whint && (c.whint != whint)) {
 		u64 hint = whint;
@@ -629,8 +643,15 @@ static int __dev_write(void *buf, __u64 offset, size_t len, enum rw_hint whint)
 	}
 #endif
 
+#ifdef HAVE_PWRITE
+	if (pwrite(fd, buf, len, (off_t)offset) < 0)
+		return -1;
+#else
+	if (lseek(fd, (off_t)offset, SEEK_SET) < 0)
+		return -1;
 	if (write(fd, buf, len) < 0)
 		return -1;
+#endif
 
 	c.need_fsync = true;
 
@@ -663,10 +684,15 @@ int dev_write_block(void *buf, __u64 blk_addr, enum rw_hint whint)
 
 int dev_write_dump(void *buf, __u64 offset, size_t len)
 {
+#ifdef HAVE_PWRITE
+	if (pwrite(c.dump_fd, buf, len, (off_t)offset) < 0)
+		return -1;
+#else
 	if (lseek(c.dump_fd, (off_t)offset, SEEK_SET) < 0)
 		return -1;
 	if (write(c.dump_fd, buf, len) < 0)
 		return -1;
+#endif
 	return 0;
 }
 

@@ -318,6 +318,11 @@ void print_inode_info(struct f2fs_sb_info *sbi,
 	if (en[0]) {
 		DISP_u32(inode, i_namelen);
 		printf("%-30s\t\t[%s]\n", "i_name", en);
+
+		printf("%-30s\t\t[", "i_name(hex)");
+		for (i = 0; i < F2FS_NAME_LEN && en[i]; i++)
+			printf("0x%x ", (unsigned char)en[i]);
+		printf("0x%x]\n", (unsigned char)en[i]);
 	}
 
 	printf("i_ext: fofs:%x blkaddr:%x len:%x\n",
