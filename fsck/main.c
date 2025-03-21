@@ -215,17 +215,22 @@ static void error_out(char *prog)
 		MSG(0, "\nWrong program.\n");
 }
 
-static void __add_fsck_options(void)
-{
-	/* -a */
-	c.auto_fix = 1;
-}
-
 static void add_default_options(void)
 {
 	switch (c.defset) {
 	case CONF_ANDROID:
-		__add_fsck_options();
+		if (c.func == FSCK) {
+			/* -a */
+			c.auto_fix = 1;
+		}
+
+		/*
+		 * global config for fsck family tools, including dump,
+		 * defrag, resize, sload, label and inject.
+		 */
+
+		/* disable nat_bits feature by default */
+		c.disabled_feature |= F2FS_FEATURE_NAT_BITS;
 	}
 	c.quota_fix = 1;
 }
