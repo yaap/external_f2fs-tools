@@ -1471,6 +1471,11 @@ enum {
 
 #define MAX_CACHE_SUMS			8
 
+/* feature list in Android */
+enum {
+	F2FS_FEATURE_NAT_BITS = 0x0001,
+};
+
 struct f2fs_configuration {
 	uint32_t conf_reserved_sections;
 	uint32_t reserved_segments;
@@ -1537,6 +1542,7 @@ struct f2fs_configuration {
 	int large_nat_bitmap;
 	int fix_chksum;			/* fix old cp.chksum position */
 	unsigned int feature;			/* defined features */
+	unsigned int disabled_feature;	/* disabled feature, used for Android only */
 	unsigned int quota_bits;	/* quota bits */
 	time_t fixed_time;
 	int roll_forward;
