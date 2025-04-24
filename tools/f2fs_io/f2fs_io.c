@@ -769,16 +769,23 @@ static void do_write_with_advice(int argc, char **argv,
 		}
 	}
 
+	total_time = get_current_us();
 	if (atomic_commit || atomic_abort) {
 		int ret;
 
 		if (argc == 8)
-			useconds = atoi(argv[7]) * 1000;
+			useconds = atoi(argv[7]) * 1000 / (count + 2);
+
+		if (useconds)
+			usleep(useconds);
 
 		if (replace)
 			ret = ioctl(fd, F2FS_IOC_START_ATOMIC_REPLACE);
 		else
 			ret = ioctl(fd, F2FS_IOC_START_ATOMIC_WRITE);
+
+		if (useconds)
+			usleep(useconds);
 
 		if (ret < 0) {
 			fputs("setting atomic file mode failed\n", stderr);
@@ -786,7 +793,6 @@ static void do_write_with_advice(int argc, char **argv,
 		}
 	}
 
-	total_time = get_current_us();
 	for (i = 0; i < count; i++) {
 		uint64_t ret;
 
@@ -804,10 +810,10 @@ static void do_write_with_advice(int argc, char **argv,
 		if (ret != buf_size)
 			break;
 		written += ret;
-	}
 
-	if (useconds)
-		usleep(useconds);
+		if (useconds)
+			usleep(useconds);
+	}
 
 	if (atomic_commit) {
 		int ret;
