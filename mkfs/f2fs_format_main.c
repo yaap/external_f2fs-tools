@@ -156,6 +156,10 @@ static void add_default_options(void)
 		c.feature |= F2FS_FEATURE_PRJQUOTA;
 		c.feature |= F2FS_FEATURE_EXTRA_ATTR;
 		c.feature |= F2FS_FEATURE_VERITY;
+
+		/* enable write hitn by default */
+		c.need_whint = true;
+		c.whint = WRITE_LIFE_NOT_SET;
 		break;
 	}
 #ifdef CONF_CASEFOLD

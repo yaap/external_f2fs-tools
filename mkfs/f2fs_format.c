@@ -1012,10 +1012,9 @@ static int f2fs_write_check_point_pack(void)
 	memcpy(sum_compact_p, &journal->n_sits, SUM_JOURNAL_SIZE);
 	sum_compact_p += SUM_JOURNAL_SIZE;
 
-	/* hot data summary */
-	memset(sum, 0, F2FS_BLKSIZE);
-	SET_SUM_TYPE(sum, SUM_TYPE_DATA);
+	SET_SUM_TYPE((struct f2fs_summary_block *)sum_compact, SUM_TYPE_DATA);
 
+	/* hot data summary */
 	sum_entry = (struct f2fs_summary *)sum_compact_p;
 	memcpy(sum_entry, c.sum[CURSEG_HOT_DATA],
 			sizeof(struct f2fs_summary) * MAX_CACHE_SUMS);

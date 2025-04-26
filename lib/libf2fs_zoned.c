@@ -539,6 +539,14 @@ uint32_t f2fs_get_usable_segments(struct f2fs_super_block *sb)
 		return get_sb(segment_count_main);
 
 	for (i = 0; i < c.ndevs; i++) {
+		/*
+		 * for the case: there is only one host managed device, and
+		 * the device has both convential zones and sequential zones.
+		 */
+		if (c.ndevs == 1) {
+			usable_segs += c.devices[i].total_segments;
+			break;
+		}
 		if (c.devices[i].zoned_model != F2FS_ZONED_HM) {
 			usable_segs += c.devices[i].total_segments;
 			continue;

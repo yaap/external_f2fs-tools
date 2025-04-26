@@ -937,7 +937,7 @@ static void dump_dirent(u32 blk_addr, int is_inline, int enc_name)
 {
 	struct f2fs_dentry_ptr d;
 	void *inline_dentry, *blk;
-	int ret, i = 0;
+	int ret, i = 0, j;
 
 	blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(blk);
@@ -991,6 +991,11 @@ static void dump_dirent(u32 blk_addr, int is_inline, int enc_name)
 				le32_to_cpu(de->hash_code),
 				le32_to_cpu(de->ino),
 				de->file_type);
+
+		DBG(1, "%s", "name(hex)[");
+		for (j = 0; j < F2FS_NAME_LEN && en[j]; j++)
+			MSG(1, "0x%x ", (unsigned char)en[j]);
+		MSG(1, "0x%x]\n", (unsigned char)en[j]);
 
 		i += GET_DENTRY_SLOTS(name_len);
 	}

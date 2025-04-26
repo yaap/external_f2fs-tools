@@ -18,10 +18,13 @@ resize.f2fs \- resize filesystem size
 .I overprovision-ratio-percentage
 ]
 [
-.B \-H
+.B \-f
 ]
 [
-.B \-i
+.B \-F
+]
+[
+.B \-H
 ]
 [
 .B \-s
@@ -56,14 +59,17 @@ Specify the percentage of the volume that will be used as overprovision area.
 This area is hidden to users, and utilized by F2FS cleaner. If not specified, the
 best number will be assigned automatically according to the partition size.
 .TP
+.BI \-f
+Force to fix any inconsistent data during resize.
+.TP
+.BI \-F
+Skip caution dialogue and resize partition directly.
+.TP
 .BI \-H
 Specify support write hint.
 .TP
-.BI \-i
-Enable extended node bitmap.
-.TP
 .BI \-s
-Enable safe resize.
+Enable safe resize, it can only be used w/ shrink resize.
 .TP
 .BI \-V
 Print the version number and exit.
