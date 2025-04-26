@@ -91,6 +91,7 @@ void fsck_usage()
 	MSG(0, "  --no-kernel-check skips detecting kernel change\n");
 	MSG(0, "  --kernel-check checks kernel change\n");
 	MSG(0, "  --debug-cache to debug cache when -c is used\n");
+	MSG(0, "  --nolinear-lookup=X X=1: disable linear lookup, X=0: enable linear lookup\n");
 	exit(1);
 }
 
@@ -140,7 +141,6 @@ void resize_usage()
 	MSG(0, "[options]:\n");
 	MSG(0, "  -d debug level [default:0]\n");
 	MSG(0, "  -H support write hint\n");
-	MSG(0, "  -i extended node bitmap, node ratio is 20%% by default\n");
 	MSG(0, "  -o overprovision percentage [default:auto]\n");
 	MSG(0, "  -s safe resize (Does not resize metadata)\n");
 	MSG(0, "  -t target sectors [default: device size]\n");
@@ -222,6 +222,8 @@ static void add_default_options(void)
 		if (c.func == FSCK) {
 			/* -a */
 			c.auto_fix = 1;
+		} else if (c.func == RESIZE) {
+			c.force = 1;
 		}
 
 		/*
@@ -231,6 +233,10 @@ static void add_default_options(void)
 
 		/* disable nat_bits feature by default */
 		c.disabled_feature |= F2FS_FEATURE_NAT_BITS;
+
+		/* enable write hitn by default */
+		c.need_whint = true;
+		c.whint = WRITE_LIFE_NOT_SET;
 	}
 	c.quota_fix = 1;
 }
@@ -263,6 +269,7 @@ void f2fs_parse_options(int argc, char *argv[])
 			{"no-kernel-check", no_argument, 0, 2},
 			{"kernel-check", no_argument, 0, 3},
 			{"debug-cache", no_argument, 0, 4},
+			{"nolinear-lookup", required_argument, 0, 5},
 			{0, 0, 0, 0}
 		};
 
@@ -286,6 +293,12 @@ void f2fs_parse_options(int argc, char *argv[])
 				break;
 			case 4:
 				c.cache_config.dbg_en = true;
+				break;
+			case 5:
+				if (!optarg || !strcmp(optarg, "0"))
+					c.nolinear_lookup = LINEAR_LOOKUP_ENABLE;
+				else
+					c.nolinear_lookup = LINEAR_LOOKUP_DISABLE;
 				break;
 			case 'a':
 				c.auto_fix = 1;
@@ -594,7 +607,7 @@ void f2fs_parse_options(int argc, char *argv[])
 #endif
 	} else if (!strcmp("resize.f2fs", prog)) {
 #ifdef WITH_RESIZE
-		const char *option_string = "d:fHst:io:V";
+		const char *option_string = "d:fFHst:o:V";
 
 		c.func = RESIZE;
 		while ((option = getopt(argc, argv, option_string)) != EOF) {
@@ -611,6 +624,10 @@ void f2fs_parse_options(int argc, char *argv[])
 							c.dbg_lv);
 				break;
 			case 'f':
+				c.ignore_error = 1;
+				MSG(0, "Info: Ignore errors during resize\n");
+				break;
+			case 'F':
 				c.force = 1;
 				MSG(0, "Info: Force to resize\n");
 				break;
@@ -628,9 +645,6 @@ void f2fs_parse_options(int argc, char *argv[])
 				else
 					ret = sscanf(optarg, "%"PRIx64"",
 							&c.target_sectors);
-				break;
-			case 'i':
-				c.large_nat_bitmap = 1;
 				break;
 			case 'o':
 				c.new_overprovision = atof(optarg);
@@ -990,6 +1004,8 @@ static int do_fsck(struct f2fs_sb_info *sbi)
 			F2FS_FT_DIR, TYPE_INODE, &blk_cnt, &cbc, &child);
 	fsck_chk_quota_files(sbi);
 
+	fsck_update_sb_flags(sbi);
+
 	ret = fsck_verify(sbi);
 	fsck_free(sbi);
 
@@ -1098,6 +1114,23 @@ out_range:
 #ifdef WITH_RESIZE
 static int do_resize(struct f2fs_sb_info *sbi)
 {
+	char answer[255] = {0};
+	int ret;
+
+	if (!c.force) {
+retry:
+		printf("\nResize operation is currently experimental, please "
+			"backup your data.\nDo you want to continue? [y/n]");
+		ret = scanf("%s", answer);
+		ASSERT(ret >= 0);
+		if (!strcasecmp(answer, "y"))
+			printf("Proceeding to resize\n");
+		else if (!strcasecmp(answer, "n"))
+			return 0;
+		else
+			goto retry;
+	}
+
 	if (!c.target_sectors)
 		c.target_sectors = c.total_sectors;
 
