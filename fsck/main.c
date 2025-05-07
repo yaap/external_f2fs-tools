@@ -92,6 +92,8 @@ void fsck_usage()
 	MSG(0, "  --kernel-check checks kernel change\n");
 	MSG(0, "  --debug-cache to debug cache when -c is used\n");
 	MSG(0, "  --nolinear-lookup=X X=1: disable linear lookup, X=0: enable linear lookup\n");
+	MSG(0, "  --fault_injection=%%d to enable fault injection with specified injection rate\n");
+	MSG(0, "  --fault_type=%%d to configure enabled fault injection type\n");
 	exit(1);
 }
 
@@ -270,6 +272,8 @@ void f2fs_parse_options(int argc, char *argv[])
 			{"kernel-check", no_argument, 0, 3},
 			{"debug-cache", no_argument, 0, 4},
 			{"nolinear-lookup", required_argument, 0, 5},
+			{"fault_injection", required_argument, 0, 6},
+			{"fault_type", required_argument, 0, 7},
 			{0, 0, 0, 0}
 		};
 
@@ -299,6 +303,24 @@ void f2fs_parse_options(int argc, char *argv[])
 					c.nolinear_lookup = LINEAR_LOOKUP_ENABLE;
 				else
 					c.nolinear_lookup = LINEAR_LOOKUP_DISABLE;
+				break;
+			case 6:
+				val = atoi(optarg);
+				if ((unsigned int)val <= 1) {
+					MSG(0, "\tError: injection rate must be larger "
+							"than 1: %d\n", val);
+					fsck_usage();
+				}
+				c.fault_info.inject_rate = val;
+				c.fault_info.inject_type = F2FS_ALL_FAULT_TYPE;
+				break;
+			case 7:
+				val = atoi(optarg);
+				if (val >= (1UL << (FAULT_MAX))) {
+					MSG(0, "\tError: Invalid inject type: %x\n", val);
+					fsck_usage();
+				}
+				c.fault_info.inject_type = val;
 				break;
 			case 'a':
 				c.auto_fix = 1;
@@ -1003,8 +1025,6 @@ static int do_fsck(struct f2fs_sb_info *sbi)
 	fsck_chk_node_blk(sbi, NULL, sbi->root_ino_num,
 			F2FS_FT_DIR, TYPE_INODE, &blk_cnt, &cbc, &child);
 	fsck_chk_quota_files(sbi);
-
-	fsck_update_sb_flags(sbi);
 
 	ret = fsck_verify(sbi);
 	fsck_free(sbi);
