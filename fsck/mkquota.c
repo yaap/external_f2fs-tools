@@ -372,6 +372,11 @@ errcode_t quota_compare_and_update(struct f2fs_sb_info *sbi,
 	dict_t *dict = qctx->quota_dict[qtype];
 	errcode_t err = 0;
 
+	if (time_to_inject(FAULT_QUOTA)) {
+		ASSERT_MSG("%s is injected.", f2fs_fault_name[FAULT_QUOTA]);
+		return -EINVAL;
+	}
+
 	if (!dict)
 		goto out;
 
