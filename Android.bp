@@ -294,9 +294,17 @@ cc_binary {
         "fsck.f2fs_partition_common_defaults",
     ],
     host_supported: true,
-    vendor_available: true,
     vendor_ramdisk_available: true,
     bootstrap: true,
+}
+
+cc_binary {
+    name: "fsck.f2fs.vendor",
+    defaults: [
+        "fsck.f2fs_partition_common_defaults",
+    ],
+    vendor: true,
+    stem: "fsck.f2fs",
 }
 
 cc_binary {
