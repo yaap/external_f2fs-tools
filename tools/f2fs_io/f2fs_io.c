@@ -441,7 +441,10 @@ static void do_shutdown(int argc, char **argv, const struct cmd_desc *cmd)
 "fadvice given the file\n"					\
 "advice can be\n"						\
 " willneed\n"							\
+" dontneed\n"							\
+" noreuse\n"							\
 " sequential\n"							\
+" random\n"							\
 
 static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -458,8 +461,14 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 
 	if (!strcmp(argv[1], "willneed")) {
 		advice = POSIX_FADV_WILLNEED;
+	} else if (!strcmp(argv[1], "dontneed")) {
+		advice = POSIX_FADV_DONTNEED;
+	} else if (!strcmp(argv[1], "noreuse")) {
+		advice = POSIX_FADV_NOREUSE;
 	} else if (!strcmp(argv[1], "sequential")) {
 		advice = POSIX_FADV_SEQUENTIAL;
+	} else if (!strcmp(argv[1], "random")) {
+		advice = POSIX_FADV_RANDOM;
 	} else {
 		fputs("Wrong advice\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
@@ -476,15 +485,16 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
-#define pinfile_desc "pin file control"
-#define pinfile_help						\
-"f2fs_io pinfile [get|set|unset] [file]\n\n"			\
-"get/set pinning given the file\n"				\
+#define ioprio_desc "ioprio"
+#define ioprio_help						\
+"f2fs_io ioprio [hint] [file]\n\n"				\
+"ioprio given the file\n"					\
+"hint can be\n"							\
+" ioprio_write\n"						\
 
-static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
+static void do_ioprio(int argc, char **argv, const struct cmd_desc *cmd)
 {
-	u32 pin;
-	int ret, fd;
+	int fd, hint;
 
 	if (argc != 3) {
 		fputs("Excess arguments\n\n", stderr);
@@ -492,7 +502,41 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 		exit(1);
 	}
 
-	fd = xopen(argv[2], O_RDONLY, 0);
+	fd = xopen(argv[2], O_RDWR, 0);
+
+	if (!strcmp(argv[1], "ioprio_write")) {
+		hint = F2FS_IOPRIO_WRITE;
+	} else {
+		fputs("Not supported hint\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	if (ioctl(fd, F2FS_IOC_IO_PRIO, &hint) != 0)
+		die_errno("ioprio failed");
+
+	printf("ioprio_hint %d to a file: %s\n", hint, argv[2]);
+	exit(0);
+}
+
+#define pinfile_desc "pin file control"
+#define pinfile_help						\
+"f2fs_io pinfile [get|set|unset] [file] {size}\n\n"		\
+"get/set/unset pinning given the file\n"			\
+"{size} is fallocate length and optional only for set operations\n"
+
+static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	u32 pin;
+	int ret, fd;
+
+	if (argc < 3 || argc > 4) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[2], O_RDWR, 0);
 
 	ret = -1;
 	if (!strcmp(argv[1], "set")) {
@@ -500,8 +544,19 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
 		if (ret != 0)
 			die_errno("F2FS_IOC_SET_PIN_FILE failed");
-		printf("%s pinfile: %u blocks moved in %s\n",
-					argv[1], ret, argv[2]);
+		if (argc != 4) {
+			printf("%s pinfile: %u blocks moved in %s\n",
+						argv[1], ret, argv[2]);
+			exit(0);
+		}
+
+		struct stat st;
+		if (fallocate(fd, 0, 0, atoll(argv[3])) != 0)
+			die_errno("fallocate failed");
+		if (fstat(fd, &st) != 0)
+			die_errno("fstat failed");
+		printf("%s pinfile: %u blocks moved and fallocate %"PRIu64" bytes in %s\n",
+					argv[1], ret, st.st_size, argv[2]);
 	} else if (!strcmp(argv[1], "unset")) {
 		pin = 0;
 		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
@@ -946,6 +1001,119 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		else if (i % 2 == 0)
 			printf(" ");
 	}
+	printf("\n");
+	exit(0);
+}
+
+#define fragread_desc "read data with a fragmented buffer from file"
+#define fragread_help					\
+"f2fs_io fragread [chunk_size in 4kb] [offset in chunk_size] [count] [advice] [file_path]\n\n"	\
+"Read data in file_path and print nbytes\n"		\
+"advice can be\n"					\
+" 1 : set sequential|willneed\n"			\
+" 0 : none\n"						\
+
+#ifndef PAGE_SIZE
+#define PAGE_SIZE sysconf(_SC_PAGESIZE)
+#endif
+#define ALLOC_SIZE (2 * 1024 * 1024 - 4 * 1024) // 2MB - 4KB
+
+static void do_fragread(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	u64 buf_size = 0, ret = 0, read_cnt = 0;
+	u64 offset;
+	char *buf = NULL;
+	uintptr_t idx, ptr;
+	unsigned bs, count, i;
+	u64 total_time = 0;
+	int flags = 0, alloc_count = 0;
+	void *mem_hole, **mem_holes;
+	int fd, advice;
+
+	if (argc != 6) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	bs = atoi(argv[1]);
+	if (bs > 256 * 1024)
+		die("Too big chunk size - limit: 1GB");
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
+
+	offset = atoi(argv[2]) * buf_size;
+	count = atoi(argv[3]);
+	advice = atoi(argv[4]);
+	mem_holes = xmalloc(sizeof(void *) * (buf_size / PAGE_SIZE));
+
+	/* 1. Allocate the buffer using mmap. */
+	buf = mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+	/* 2. Loop and touch each page. */
+	for (idx = (uintptr_t)buf; idx < (uintptr_t)buf + buf_size;
+						idx += PAGE_SIZE)
+	{
+		/* Touch the current page. */
+		volatile char *page = (volatile char *)idx;
+		*page;
+
+		/* 3. Allocate (2M - 4K) memory using mmap and touch all of it. */
+		mem_hole = mmap(NULL, ALLOC_SIZE, PROT_READ | PROT_WRITE,
+					MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mem_hole == MAP_FAILED)
+			die_errno("map failed");
+
+		/* Store the allocated memory pointer. */
+		mem_holes[alloc_count++] = mem_hole;
+
+		/* Touch all allocated memory. */
+		for (ptr = (uintptr_t)mem_hole;
+			ptr < (uintptr_t)mem_hole + ALLOC_SIZE;
+						ptr += PAGE_SIZE) {
+			volatile char *alloc_page = (volatile char *)ptr;
+			*alloc_page;
+		}
+	}
+	printf("Touched allocated memory: count = %u\n", alloc_count);
+	printf(" - allocated memory: = ");
+	for (idx = 0; idx < 5; idx++)
+		printf(" %p", mem_holes[idx]);
+	printf("\n");
+
+	/* Pin the pages. */
+	if (mlock(buf, buf_size))
+		die_errno("mlock failed");
+
+	fd = xopen(argv[5], O_RDONLY | flags, 0);
+
+	if (advice) {
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_SEQUENTIAL) != 0)
+			die_errno("fadvise failed");
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_WILLNEED) != 0)
+			die_errno("fadvise failed");
+		printf("fadvise SEQUENTIAL|WILLNEED to a file: %s\n", argv[5]);
+	}
+
+	total_time = get_current_us();
+
+	for (i = 0; i < count; i++) {
+		ret = pread(fd, buf, buf_size, offset + buf_size * i);
+		if (ret != buf_size) {
+			printf("pread expected: %"PRIu64", readed: %"PRIu64"\n",
+					buf_size, ret);
+			if (ret > 0)
+				read_cnt += ret;
+			break;
+		}
+
+		read_cnt += ret;
+	}
+	printf("Fragmented_Read %"PRIu64" bytes total_time = %"PRIu64" us, BW = %.Lf MB/s\n",
+		read_cnt, get_current_us() - total_time,
+		((long double)read_cnt / (get_current_us() - total_time)));
 	printf("\n");
 	exit(0);
 }
@@ -1887,6 +2055,31 @@ static void do_get_advise(int argc, char **argv, const struct cmd_desc *cmd)
 	printf("\n");
 }
 
+#define ftruncate_desc "ftruncate a file"
+#define ftruncate_help					\
+"f2fs_io ftruncate [length] [file_path]\n\n"	\
+"Do ftruncate a file in file_path with the length\n"	\
+
+static void do_ftruncate(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd, ret;
+	off_t length;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	length = atoll(argv[1]);
+	fd = xopen(argv[2], O_WRONLY, 0);
+
+	ret = ftruncate(fd, length);
+	if (ret < 0)
+		die_errno("ftruncate failed");
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -1909,6 +2102,7 @@ const struct cmd_desc cmd_list[] = {
 	CMD(write_advice),
 	CMD(read),
 	CMD(randread),
+	CMD(fragread),
 	CMD(fiemap),
 	CMD(gc_urgent),
 	CMD(defrag_file),
@@ -1932,6 +2126,8 @@ const struct cmd_desc cmd_list[] = {
 	CMD(removexattr),
 	CMD(lseek),
 	CMD(get_advise),
+	CMD(ioprio),
+	CMD(ftruncate),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 

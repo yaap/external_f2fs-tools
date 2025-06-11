@@ -318,6 +318,11 @@ void print_inode_info(struct f2fs_sb_info *sbi,
 	if (en[0]) {
 		DISP_u32(inode, i_namelen);
 		printf("%-30s\t\t[%s]\n", "i_name", en);
+
+		printf("%-30s\t\t[", "i_name(hex)");
+		for (i = 0; i < F2FS_NAME_LEN && en[i]; i++)
+			printf("0x%x ", (unsigned char)en[i]);
+		printf("0x%x]\n", (unsigned char)en[i]);
 	}
 
 	printf("i_ext: fofs:%x blkaddr:%x len:%x\n",
@@ -1708,7 +1713,8 @@ u32 update_nat_bits_flags(struct f2fs_super_block *sb,
 	nat_bits_bytes = get_sb(segment_count_nat) << 5;
 	nat_bits_blocks = F2FS_BYTES_TO_BLK((nat_bits_bytes << 1) + 8 +
 						F2FS_BLKSIZE - 1);
-	if (get_cp(cp_pack_total_block_count) <=
+	if (!(c.disabled_feature & F2FS_FEATURE_NAT_BITS) &&
+			get_cp(cp_pack_total_block_count) <=
 			(1 << get_sb(log_blocks_per_seg)) - nat_bits_blocks)
 		flags |= CP_NAT_BITS_FLAG;
 	else
