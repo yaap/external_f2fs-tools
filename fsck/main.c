@@ -91,7 +91,7 @@ void fsck_usage()
 	MSG(0, "  --no-kernel-check skips detecting kernel change\n");
 	MSG(0, "  --kernel-check checks kernel change\n");
 	MSG(0, "  --debug-cache to debug cache when -c is used\n");
-	MSG(0, "  --nolinear-lookup=X X=1: disable linear lookup, X=0: enable linear lookup\n");
+	MSG(0, "  --nolinear-lookup=X X=1: disable linear lookup, X=0: enable linear lookup. For android case, it will disable linear lookup by default\n");
 	MSG(0, "  --fault_injection=%%d to enable fault injection with specified injection rate\n");
 	MSG(0, "  --fault_type=%%d to configure enabled fault injection type\n");
 	exit(1);
@@ -224,6 +224,9 @@ static void add_default_options(void)
 		if (c.func == FSCK) {
 			/* -a */
 			c.auto_fix = 1;
+
+			/* disable linear lookup by default */
+			c.nolinear_lookup = LINEAR_LOOKUP_DISABLE;
 		} else if (c.func == RESIZE) {
 			c.force = 1;
 		}

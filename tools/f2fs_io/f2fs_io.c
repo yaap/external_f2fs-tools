@@ -36,6 +36,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/xattr.h>
+#define _GNU_SOURCE
+#include <dirent.h>
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -258,6 +260,8 @@ static void do_getflags(int argc, char **argv, const struct cmd_desc *cmd)
 
 	ret = ioctl(fd, F2FS_IOC_GETFLAGS, &flag);
 	printf("get a flag on %s ret=%d, flags=", argv[1], ret);
+	if (ret)
+		die_errno("F2FS_IOC_GETFLAGS failed");
 	if (flag & FS_CASEFOLD_FL) {
 		printf("casefold");
 		exist = 1;
@@ -352,6 +356,8 @@ static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 
 	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
 	printf("set a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
+	if (ret)
+		die_errno("F2FS_IOC_SETFLAGS failed");
 	exit(0);
 }
 
@@ -394,6 +400,8 @@ static void do_clearflags(int argc, char **argv, const struct cmd_desc *cmd)
 
 	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
 	printf("clear a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
+	if (ret)
+		die_errno("F2FS_IOC_SETFLAGS failed");
 	exit(0);
 }
 
@@ -2086,6 +2094,298 @@ static void do_ftruncate(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define test_create_perf_desc "measure file creation speed"
+#define test_create_perf_help						\
+"f2fs_io test_create_perf [-s] [-S] <dir> <num_files> <size_kb>\n\n"	\
+"Measures file creation and deletion performance.\n"			\
+"  <dir>          The target directory where files will be created.\n"	\
+"  <num_files>    The total number of files to create and delete.\n"	\
+"  <size_kb>      The size of each file in kb.\n"			\
+"  [-s]           Call fsync() after each file creation.\n"		\
+"  [-S]           Call sync() after deleting all files.\n"
+
+static void do_test_create_perf(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	bool do_fsync = false, do_sync = false;
+	int opt;
+	char *dir;
+	int num_files;
+	int size_kb;
+	char *write_buffer = NULL;
+
+	while ((opt = getopt(argc, argv, "sS")) != -1) {
+		switch (opt) {
+		case 's':
+			do_fsync = true;
+			break;
+		case 'S':
+			do_sync = true;
+			break;
+		default:
+			fputs(cmd->cmd_help, stderr);
+			exit(1);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	dir = argv[0];
+	num_files = atoi(argv[1]);
+	size_kb = atoi(argv[2]);
+
+	if (num_files <= 0) {
+		fprintf(stderr, "Error: Number of files must be positive.\n");
+		exit(1);
+	}
+
+	if (size_kb > 0) {
+		write_buffer = malloc(size_kb * 1024);
+		if (!write_buffer) {
+			perror("Failed to allocate write buffer");
+			exit(1);
+		}
+		memset(write_buffer, 'a', size_kb * 1024);
+	}
+
+	// Creation Phase
+	printf("Starting test: Creating %d files of %dKB each in %s (fsync: %s)\n",
+		num_files, size_kb, dir,
+		do_fsync ? "Enabled" : "Disabled");
+
+	struct timespec create_start, create_end;
+
+	clock_gettime(CLOCK_MONOTONIC, &create_start);
+
+	for (int i = 0; i < num_files; i++) {
+		char path[1024];
+
+		snprintf(path, sizeof(path), "%s/test_file_%d", dir, i);
+
+		int fd = open(path, O_WRONLY | O_CREAT, 0644);
+
+		if (fd < 0) {
+			perror("Error opening file");
+			continue;
+		}
+		if (size_kb > 0) {
+			if (write(fd, write_buffer, size_kb * 1024) < 0)
+				perror("Error writing to file");
+		}
+
+		if (do_fsync)
+			fsync(fd);
+
+		close(fd);
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &create_end);
+
+
+	// Deletion Phase
+	printf("Deleting %d created files (sync: %s)\n", num_files,
+		do_sync ? "Enabled" : "Disabled");
+
+	struct timespec del_start, del_end;
+
+	clock_gettime(CLOCK_MONOTONIC, &del_start);
+
+	for (int i = 0; i < num_files; i++) {
+		char path[1024];
+
+		snprintf(path, sizeof(path), "%s/test_file_%d", dir, i);
+		if (unlink(path) != 0)
+			perror("Error unlinking file");
+	}
+
+	if (do_sync)
+		sync();
+
+	clock_gettime(CLOCK_MONOTONIC, &del_end);
+
+	long create_seconds = create_end.tv_sec - create_start.tv_sec;
+	long create_ns = create_end.tv_nsec - create_start.tv_nsec;
+	double create_time_s = (double)create_seconds + (double)create_ns / 1000000000.0;
+	double create_throughput = (create_time_s > 0) ? (num_files / create_time_s) : 0;
+
+	long del_seconds = del_end.tv_sec - del_start.tv_sec;
+	long del_ns = del_end.tv_nsec - del_start.tv_nsec;
+	double del_time_s = (double)del_seconds + (double)del_ns / 1000000000.0;
+	double del_throughput = (del_time_s > 0) ? (num_files / del_time_s) : 0;
+
+	printf("Operation,total_files,file_size_kb,total_time_s,throughput_files_per_sec\n");
+
+	printf("CREATE,%d,%d,%.4f,%.2f\n",
+		   num_files,
+		   size_kb,
+		   create_time_s,
+		   create_throughput);
+
+	printf("DELETE,%d,%d,%.4f,%.2f\n",
+		   num_files,
+		   size_kb,
+		   del_time_s,
+		   del_throughput);
+
+	if (write_buffer)
+		free(write_buffer);
+
+	exit(0);
+}
+
+#define test_lookup_perf_desc "measure readdir/stat speed"
+#define test_lookup_perf_help						\
+"f2fs_io test_lookup_perf [-i] [-v] <dir> <num_files>\n\n"		\
+"Measures readdir/stat performance.\n"				\
+"  <dir>          The target directory in where it will test on.\n"	\
+"  <num_files>    The total number of files the test will initialize or test.\n"\
+"  [-i]           Initialized to create files only.\n"\
+"  [-v]           Verbose mode.\n"
+
+static void do_test_lookup_perf(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	struct timespec readdir_start, readdir_end;
+	struct timespec stat_start, stat_end;
+	DIR *dirp;
+	struct dirent *dp;
+	int opt;
+	char *dir;
+	int num_files;
+	bool need_initialize = false;
+	bool verb = false;
+	int i;
+
+	while ((opt = getopt(argc, argv, "iv")) != -1) {
+		switch (opt) {
+		case 'i':
+			need_initialize = true;
+			break;
+		case 'v':
+			verb = true;
+			break;
+		default:
+			fputs(cmd->cmd_help, stderr);
+			exit(1);
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	dir = argv[0];
+	num_files = atoi(argv[1]);
+
+	if (num_files <= 0) {
+		fprintf(stderr, "Error: Number of files must be positive.\n");
+		exit(1);
+	}
+
+	if (need_initialize) {
+		int fd;
+
+		// Initialization Phase
+		printf("Starting test: Creating %d files in %s\n", num_files, dir);
+
+		for (i = 0; i < num_files; i++) {
+			char path[1024];
+
+			snprintf(path, sizeof(path), "%s/test_file_%d", dir, i);
+
+			fd = xopen(path, O_WRONLY | O_CREAT, 0644);
+			if (fd < 0)
+				exit(1);
+			close(fd);
+		}
+
+		exit(0);
+	}
+
+	// Measure readdir performance
+	printf("Measure readdir performance\n");
+	clock_gettime(CLOCK_MONOTONIC, &readdir_start);
+
+	dirp = opendir(dir);
+	if (dirp == NULL) {
+		perror("opendir failed");
+		exit(1);
+	}
+
+	if (verb)
+		printf("inode    file type  d_reclen  d_off    d_name\n");
+
+	while ((dp = readdir(dirp)) != NULL) {
+		if (!verb)
+			continue;
+
+		printf("%-8llu %-10s %-9d %-8jd %s\n",
+			(unsigned long long)dp->d_ino,
+			(dp->d_type == DT_REG) ?  "regular" :
+			(dp->d_type == DT_DIR) ?  "directory" :
+			(dp->d_type == DT_FIFO) ? "FIFO" :
+			(dp->d_type == DT_SOCK) ? "socket" :
+			(dp->d_type == DT_LNK) ?  "symlink" :
+			(dp->d_type == DT_BLK) ?  "block dev" :
+			(dp->d_type == DT_CHR) ?  "char dev" : "unknown",
+			dp->d_reclen, dp->d_off, dp->d_name);
+	}
+
+	closedir(dirp);
+
+	clock_gettime(CLOCK_MONOTONIC, &readdir_end);
+
+	// Measure stat performance
+	printf("Measure stat performance\n");
+
+	clock_gettime(CLOCK_MONOTONIC, &stat_start);
+
+	for (i = 0; i < num_files; i++) {
+		char path[1024];
+		struct stat st;
+
+		snprintf(path, sizeof(path), "%s/test_file_%d", dir, i);
+		if (stat(path, &st) != 0)
+			die_errno("stat failed");
+	}
+
+	clock_gettime(CLOCK_MONOTONIC, &stat_end);
+
+	long readdir_seconds = readdir_end.tv_sec - readdir_start.tv_sec;
+	long readdir_ns = readdir_end.tv_nsec - readdir_start.tv_nsec;
+	double readdir_time_s = (double)readdir_seconds + (double)readdir_ns / 1000000000.0;
+	double readdir_throughput = (readdir_time_s > 0) ? (num_files / readdir_time_s) : 0;
+
+	long stat_seconds = stat_end.tv_sec - stat_start.tv_sec;
+	long stat_ns = stat_end.tv_nsec - stat_start.tv_nsec;
+	double stat_time_s = (double)stat_seconds + (double)stat_ns / 1000000000.0;
+	double stat_throughput = (stat_time_s > 0) ? (num_files / stat_time_s) : 0;
+
+	printf("Operation: total_files, total_time_s, throughput_files_per_sec\n");
+
+	printf("readdir: %d, %.4f, %.2f\n",
+		   num_files,
+		   readdir_time_s,
+		   readdir_throughput);
+
+	printf("stat: %d, %.4f, %.2f\n",
+		   num_files,
+		   stat_time_s,
+		   stat_throughput);
+
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -2134,6 +2434,8 @@ const struct cmd_desc cmd_list[] = {
 	CMD(get_advise),
 	CMD(ioprio),
 	CMD(ftruncate),
+	CMD(test_create_perf),
+	CMD(test_lookup_perf),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 

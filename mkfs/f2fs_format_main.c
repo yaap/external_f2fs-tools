@@ -384,6 +384,12 @@ static void f2fs_parse_options(int argc, char *argv[])
 		mkfs_usage();
 	}
 
+	if (c.ndevs > 1 && strlen(argv[optind]) > MAX_PATH_LEN) {
+		MSG(0, "Error: main device path %s should be equal or "
+				"less than %d characters\n",
+				argv[optind], MAX_PATH_LEN);
+		mkfs_usage();
+	}
 	/* [0] : META, [1 to MAX_DEVICES - 1] : NODE/DATA */
 	c.devices[0].path = strdup(argv[optind]);
 
