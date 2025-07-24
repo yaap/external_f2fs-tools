@@ -184,6 +184,28 @@ Get i_advise value and info in file
 .TP
 \fBioprio\fR \fI[hint] [file]\fR
 Set ioprio to the file. The ioprio can be ioprio_write.
+.TP
+\fBtest_create_perf\fR \fI[-s] [-S] [dir] [num_files] [size_kb]\fR
+Measure file creation and deletion performance.
+.RS 1.2in
+.TP
+.B -s
+Call fsync() after each file creation.
+.TP
+.B -S
+Call sync() after deleting all files.
+.RE
+.TP
+\fBtest_lookup_perf\fR \fI[-i] [-v] [dir] [num_files]\fR
+Measure readdir/stat performance.
+.RS 1.2in
+.TP
+.B -i
+Initialized to create files only.
+.TP
+.B -v
+Verbose mode.
+.RE
 .SH AUTHOR
 This version of
 .B f2fs_io

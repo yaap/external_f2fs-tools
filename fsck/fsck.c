@@ -3526,15 +3526,27 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 
 	ret = f2fs_finish_zone(wpd->dev_index, blkz);
 	if (ret) {
+		u8 *buffer;
+		u64 blk_addr = wp_block;
 		u64 fill_sects = blk_zone_length(blkz) -
 			(blk_zone_wp_sector(blkz) - blk_zone_sector(blkz));
+		size_t len = fill_sects >> log_sectors_per_block;
 		struct seg_entry *se = get_seg_entry(sbi, wp_segno);
+		enum rw_hint whint = f2fs_io_type_to_rw_hint(se->type);
+
+		buffer = calloc(F2FS_BLKSIZE, 1);
+		ASSERT(buffer);
+
 		printf("[FSCK] Finishing zone failed: %s\n", dev->path);
-		ret = dev_fill(NULL, wp_block * F2FS_BLKSIZE,
-			(fill_sects >> log_sectors_per_block) * F2FS_BLKSIZE,
-			f2fs_io_type_to_rw_hint(se->type));
-		if (ret)
-			printf("[FSCK] Fill up zone failed: %s\n", dev->path);
+		while (len--) {
+			ret = dev_fill_block(buffer, blk_addr++, whint);
+			if (ret) {
+				printf("[FSCK] Fill up zone failed: %s\n", dev->path);
+				break;
+			}
+		}
+
+		free(buffer);
 	}
 
 	if (!ret)
