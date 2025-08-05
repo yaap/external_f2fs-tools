@@ -143,7 +143,8 @@ static void add_default_options(void)
 		force_overwrite = 1;
 		c.wanted_sector_size = F2FS_BLKSIZE;
 		c.root_uid = c.root_gid = 0;
-		c.disabled_feature |= F2FS_FEATURE_NAT_BITS;
+		c.disabled_feature |= F2FS_FEATURE_NAT_BITS |
+					F2FS_FEATURE_LINEAR_LOOKUP;
 
 		/* RO doesn't need any other features */
 		if (c.feature & F2FS_FEATURE_RO)

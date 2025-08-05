@@ -1424,6 +1424,7 @@ static const struct enc_flags {
 	char *param;
 } encoding_flags[] = {
 	{ F2FS_ENC_STRICT_MODE_FL, "strict" },
+	{ F2FS_ENC_NO_COMPAT_FALLBACK_FL, "hashonly"}
 };
 
 /* Return a positive number < 0xff indicating the encoding magic number
@@ -1484,6 +1485,11 @@ int f2fs_str2encoding_flags(char **param, __u16 *flags)
 					MSG(0, "Add %s\n", fl->param);
 					*flags |= fl->flag;
 				}
+
+				if (fl->flag == F2FS_ENC_NO_COMPAT_FALLBACK_FL)
+					c.nolinear_lookup = neg ?
+						LINEAR_LOOKUP_ENABLE :
+						LINEAR_LOOKUP_DISABLE;
 
 				goto next_flag;
 			}
