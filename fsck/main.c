@@ -226,7 +226,7 @@ static void add_default_options(void)
 			c.auto_fix = 1;
 
 			/* disable linear lookup by default */
-			c.nolinear_lookup = LINEAR_LOOKUP_DISABLE;
+			c.disabled_feature |= F2FS_FEATURE_LINEAR_LOOKUP;
 		} else if (c.func == RESIZE) {
 			c.force = 1;
 		}

@@ -2425,6 +2425,15 @@ void fsck_update_sb_flags(struct f2fs_sb_info *sbi)
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	u16 flags = get_sb(s_encoding_flags);
 
+	/* handle default option for Android case */
+	if ((c.nolinear_lookup == LINEAR_LOOKUP_DEFAULT) &&
+		c.disabled_feature & F2FS_FEATURE_LINEAR_LOOKUP) {
+		c.nolinear_lookup = LINEAR_LOOKUP_DISABLE;
+		MSG(0, "Info: set default linear_lookup option: %s\n",
+			c.nolinear_lookup == LINEAR_LOOKUP_DISABLE ?
+			"disable" : "enable");
+	}
+
 	if (c.nolinear_lookup == LINEAR_LOOKUP_DEFAULT) {
 		MSG(0, "Info: Casefold: linear_lookup [%s]\n",
 			get_sb(s_encoding_flags) & F2FS_ENC_NO_COMPAT_FALLBACK_FL ?
