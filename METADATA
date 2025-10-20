@@ -17,4 +17,7 @@ third_party {
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git"
     version: "3bd49149dae7237b931b09d87d00b2aef8f7af93"
   }
+  security: {
+    tag: "NVD-CPE2.3:cpe:/a:f2fs-tools_project:f2fs-tools:1.16.0"
+  }
 }
