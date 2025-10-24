@@ -753,19 +753,21 @@ static int f2fs_resize_shrink(struct f2fs_sb_info *sbi)
 int f2fs_resize(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
+	uint64_t target_blocks = c.target_sectors * c.sector_size >> get_sb(log_blocksize);
+
+	MSG(0, "Info: reszie wanted target FS sectors = %"PRIu64" (%"PRIu64" MB)\n" ,
+			target_blocks << sbi->log_sectors_per_block,
+			target_blocks >> (20 - get_sb(log_blocksize)));
 
 	/* may different sector size */
-	if ((c.target_sectors * c.sector_size >>
-			get_sb(log_blocksize)) < get_sb(block_count)) {
+	if (target_blocks < get_sb(block_count)) {
 		if (!c.safe_resize) {
 			ASSERT_MSG("Nothing to resize, now only supports resizing with safe resize flag\n");
 			return -1;
 		} else {
 			return f2fs_resize_shrink(sbi);
 		}
-	} else if (((c.target_sectors * c.sector_size >>
-			get_sb(log_blocksize)) > get_sb(block_count)) ||
-			c.ignore_error) {
+	} else if ((target_blocks > get_sb(block_count)) || c.ignore_error) {
 		if (c.safe_resize) {
 			ASSERT_MSG("Expanding resize doesn't support safe resize flag");
 			return -1;
