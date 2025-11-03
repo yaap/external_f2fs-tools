@@ -125,8 +125,17 @@ options can be:
 .B buffered
 buffered I/O
 .TP
+.B dontcache
+buffered I/O with RWF_DONTCACHE
+.TP
 .B dio
 direct I/O
+.TP
+.B mmap
+mmap(MAP_POPULATE)
+.TP
+.B mlock
+mmap() + mlock()
 .RE
 .TP
 \fBfiemap\fR \fI[offset in 4kb] [count] [file_path]\fR

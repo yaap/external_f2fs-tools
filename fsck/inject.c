@@ -10,8 +10,21 @@
  */
 
 #include <getopt.h>
+#include "f2fs.h"
 #include "node.h"
 #include "inject.h"
+
+/* localtion of a sit/nat entry */
+enum entry_pos {
+	ENT_IN_JOURNAL,
+	ENT_IN_PACK1,
+	ENT_IN_PACK2
+};
+
+/* format of printing entry position */
+#define PRENTPOS "%s %d"
+#define show_entry_pos(pack) (pack) == ENT_IN_JOURNAL ? "journal" : "pack", \
+			     (pack) == ENT_IN_JOURNAL ? 0 : (pack)
 
 static void print_raw_nat_entry_info(struct f2fs_nat_entry *ne)
 {
@@ -104,7 +117,7 @@ void inject_usage(void)
 	MSG(0, "  --sit <0|1|2> --mb <name> --blk <blk> [--idx <index>] --val <value> inject sit entry\n");
 	MSG(0, "  --ssa --mb <name> --blk <blk> [--idx <index>] --val <value> inject summary entry\n");
 	MSG(0, "  --node --mb <name> --nid <nid> [--idx <index>] --val <value> inject node\n");
-	MSG(0, "  --dent --mb <name> --nid <ino> [--idx <index>] --val <value> inject ino's dentry\n");
+	MSG(0, "  --dent --mb <name> --nid <ino> [--dots <1|2>] --val/str <value/string> inject ino's dentry\n");
 	MSG(0, "  --dry-run do not really inject\n");
 
 	exit(1);
@@ -121,6 +134,7 @@ static void inject_sb_usage(void)
 	MSG(0, "  magic: inject magic number\n");
 	MSG(0, "  s_stop_reason: inject s_stop_reason array selected by --idx <index>\n");
 	MSG(0, "  s_errors: inject s_errors array selected by --idx <index>\n");
+	MSG(0, "  feature: inject feature\n");
 	MSG(0, "  devs.path: inject path in devs array selected by --idx <index> specified by --str <string>\n");
 }
 
@@ -138,6 +152,10 @@ static void inject_cp_usage(void)
 	MSG(0, "  cur_node_blkoff: inject cur_node_blkoff array selected by --idx <index>\n");
 	MSG(0, "  cur_data_segno: inject cur_data_segno array selected by --idx <index>\n");
 	MSG(0, "  cur_data_blkoff: inject cur_data_blkoff array selected by --idx <index>\n");
+	MSG(0, "  alloc_type: inject alloc_type array selected by --idx <index>\n");
+	MSG(0, "  next_blkaddr: inject next_blkaddr of fsync dnodes selected by --idx <index>\n");
+	MSG(0, "  crc: inject crc checksum\n");
+	MSG(0, "  elapsed_time: inject elapsed_time\n");
 }
 
 static void inject_nat_usage(void)
@@ -192,8 +210,14 @@ static void inject_node_usage(void)
 	MSG(0, "  i_links: inject inode i_links\n");
 	MSG(0, "  i_size: inject inode i_size\n");
 	MSG(0, "  i_blocks: inject inode i_blocks\n");
+	MSG(0, "  i_xattr_nid: inject inode i_xattr_nid\n");
+	MSG(0, "  i_ext.fofs: inject inode i_ext.fofs\n");
+	MSG(0, "  i_ext.blk_addr: inject inode i_ext.blk_addr\n");
+	MSG(0, "  i_ext.len: inject inode i_ext.len\n");
 	MSG(0, "  i_extra_isize: inject inode i_extra_isize\n");
+	MSG(0, "  i_inline_xattr_size: inject inode i_inline_xattr_size\n");
 	MSG(0, "  i_inode_checksum: inject inode i_inode_checksum\n");
+	MSG(0, "  i_compr_blocks: inject inode i_compr_blocks\n");
 	MSG(0, "  i_addr: inject inode i_addr array selected by --idx <index>\n");
 	MSG(0, "  i_nid: inject inode i_nid array selected by --idx <index>\n");
 	MSG(0, "  addr: inject {in}direct node nid/addr array selected by --idx <index>\n");
@@ -201,12 +225,16 @@ static void inject_node_usage(void)
 
 static void inject_dent_usage(void)
 {
-	MSG(0, "inject.f2fs --dent --mb <name> --nid <nid> [--idx <index>] --val <value> inject dentry\n");
+	MSG(0, "inject.f2fs --dent --mb <name> --nid <nid> [--dots <1|2>] --val/str <value/string> inject dentry\n");
+	MSG(0, "[dots]:\n");
+	MSG(0, "  1: inject \".\" in directory which is specified by nid\n");
+	MSG(0, "  2: inject \"..\" in directory which is specified by nid\n");
 	MSG(0, "[mb]:\n");
 	MSG(0, "  d_bitmap: inject dentry block d_bitmap of nid\n");
 	MSG(0, "  d_hash: inject dentry hash\n");
 	MSG(0, "  d_ino: inject dentry ino\n");
 	MSG(0, "  d_ftype: inject dentry ftype\n");
+	MSG(0, "  filename: inject dentry filename, its hash and len are updated implicitly\n");
 }
 
 int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
@@ -230,13 +258,15 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 		{"ssa", no_argument, 0, 12},
 		{"node", no_argument, 0, 13},
 		{"dent", no_argument, 0, 14},
+		{"dots", required_argument, 0, 15},
 		{0, 0, 0, 0}
 	};
 
 	while ((o = getopt_long(argc, argv, option_string,
 				long_opt, NULL)) != EOF) {
-		long nid, blk;
+		long long val;
 
+		errno = 0;
 		switch (o) {
 		case 1:
 			c.dry_run = 1;
@@ -247,18 +277,19 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 			MSG(0, "Info: inject member %s\n", optarg);
 			break;
 		case 3:
-			if (!is_digits(optarg))
-				return EWRONG_OPT;
-			opt->idx = atoi(optarg);
-			MSG(0, "Info: inject slot index %d\n", opt->idx);
-			break;
-		case 4:
-			opt->val = strtoll(optarg, &endptr, 0);
-			if (opt->val == LLONG_MAX || opt->val == LLONG_MIN ||
+			val = strtoll(optarg, &endptr, 0);
+			if (errno != 0 || val >= UINT_MAX || val < 0 ||
 			    *endptr != '\0')
 				return -ERANGE;
+			opt->idx = (unsigned int)val;
+			MSG(0, "Info: inject slot index %u\n", opt->idx);
+			break;
+		case 4:
+			opt->val = strtoull(optarg, &endptr, 0);
+			if (errno != 0 || *endptr != '\0')
+				return -ERANGE;
 			MSG(0, "Info: inject value %lld : 0x%llx\n", opt->val,
-			    (unsigned long long)opt->val);
+			    opt->val);
 			break;
 		case 5:
 			opt->str = strdup(optarg);
@@ -291,11 +322,11 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 			MSG(0, "Info: inject nat pack %s\n", pack[opt->nat]);
 			break;
 		case 9:
-			nid = strtol(optarg, &endptr, 0);
-			if (nid >= UINT_MAX || nid < 0 ||
+			val = strtoll(optarg, &endptr, 0);
+			if (errno != 0 || val >= UINT_MAX || val < 0 ||
 			    *endptr != '\0')
 				return -ERANGE;
-			opt->nid = nid;
+			opt->nid = (nid_t)val;
 			MSG(0, "Info: inject nid %u : 0x%x\n", opt->nid, opt->nid);
 			break;
 		case 10:
@@ -307,11 +338,11 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 			MSG(0, "Info: inject sit pack %s\n", pack[opt->sit]);
 			break;
 		case 11:
-			blk = strtol(optarg, &endptr, 0);
-			if (blk >= UINT_MAX || blk < 0 ||
+			val = strtoll(optarg, &endptr, 0);
+			if (errno != 0 || val >= UINT_MAX || val < 0 ||
 			    *endptr != '\0')
 				return -ERANGE;
-			opt->blk = blk;
+			opt->blk = (block_t)val;
 			MSG(0, "Info: inject blkaddr %u : 0x%x\n", opt->blk, opt->blk);
 			break;
 		case 12:
@@ -325,6 +356,14 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 		case 14:
 			opt->dent = true;
 			MSG(0, "Info: inject dentry\n");
+			break;
+		case 15:
+			opt->dots = atoi(optarg);
+			if (opt->dots != TYPE_DOT &&
+			    opt->dots != TYPE_DOTDOT)
+				return -ERANGE;
+			MSG(0, "Info: inject %s dentry\n",
+			    opt->dots == TYPE_DOT ? "dot" : "dotdot");
 			break;
 		case 'd':
 			if (optarg[0] == '-' || !is_digits(optarg))
@@ -358,6 +397,9 @@ int inject_parse_options(int argc, char *argv[], struct inject_option *opt)
 			} else if (opt->dent) {
 				inject_dent_usage();
 				exit(0);
+			} else {
+				MSG(0, "\tError: Wrong option -%c (%d) %s\n",
+				    o, o, optarg);
 			}
 			return EUNKNOWN_OPT;
 		}
@@ -408,6 +450,10 @@ static int inject_sb(struct f2fs_sb_info *sbi, struct inject_option *opt)
 		MSG(0, "Info: inject s_errors[%d] of sb %d: %x -> %x\n",
 		    opt->idx, opt->sb, sb->s_errors[opt->idx], (u8)opt->val);
 		sb->s_errors[opt->idx] = (u8)opt->val;
+	} else if (!strcmp(opt->mb, "feature")) {
+		MSG(0, "Info: inject feature of sb %d: 0x%x -> 0x%x\n",
+		    opt->sb, get_sb(feature), (u32)opt->val);
+		set_sb(feature, (u32)opt->val);
 	} else if (!strcmp(opt->mb, "devs.path")) {
 		if (opt->idx >= MAX_DEVICES) {
 			ERR_MSG("invalid index %u of sb->devs[]\n", opt->idx);
@@ -440,6 +486,7 @@ out:
 static int inject_cp(struct f2fs_sb_info *sbi, struct inject_option *opt)
 {
 	struct f2fs_checkpoint *cp, *cur_cp = F2FS_CKPT(sbi);
+	bool update_crc = true;
 	char *buf = NULL;
 	int ret = 0;
 
@@ -518,6 +565,85 @@ static int inject_cp(struct f2fs_sb_info *sbi, struct inject_option *opt)
 		    opt->idx, opt->cp, get_cp(cur_data_blkoff[opt->idx]),
 		    (u16)opt->val);
 		set_cp(cur_data_blkoff[opt->idx], (u16)opt->val);
+	} else if (!strcmp(opt->mb, "alloc_type")) {
+		if (opt->idx >= MAX_ACTIVE_LOGS) {
+			ERR_MSG("invalid index %u of cp->alloc_type[]\n",
+				opt->idx);
+			ret = -EINVAL;
+			goto out;
+		}
+		MSG(0, "Info: inject alloc_type[%d] of cp %d: 0x%x -> 0x%x\n",
+		    opt->idx, opt->cp, cp->alloc_type[opt->idx],
+		    (unsigned char)opt->val);
+		cp->alloc_type[opt->idx] = (unsigned char)opt->val;
+	} else if (!strcmp(opt->mb, "next_blkaddr")) {
+		struct fsync_inode_entry *entry;
+		struct list_head inode_list = LIST_HEAD_INIT(inode_list);
+		struct f2fs_node *node;
+		block_t blkaddr;
+		int i = 0;
+
+		if (c.zoned_model == F2FS_ZONED_HM) {
+			ERR_MSG("inject fsync dnodes not supported in "
+				"zoned device\n");
+			ret = -EOPNOTSUPP;
+			goto out;
+		}
+
+		if (!need_fsync_data_record(sbi)) {
+			ERR_MSG("no need to recover fsync dnodes\n");
+			ret = -EINVAL;
+			goto out;
+		}
+
+		ret = f2fs_find_fsync_inode(sbi, &inode_list);
+		if (ret) {
+			ERR_MSG("failed to find fsync inodes: %d\n", ret);
+			goto out;
+		}
+
+		list_for_each_entry(entry, &inode_list, list) {
+			if (i == opt->idx)
+				blkaddr = entry->blkaddr;
+			DBG(0, "[%4d] blkaddr:0x%x\n", i++, entry->blkaddr);
+		}
+
+		f2fs_destroy_fsync_dnodes(&inode_list);
+
+		if (opt->idx == 0 || opt->idx >= i) {
+			ERR_MSG("invalid index %u of fsync dnodes range [1, %u]\n",
+				opt->idx, i);
+			ret = -EINVAL;
+			goto out;
+		}
+
+		MSG(0, "Info: inject next_blkaddr[%d] of cp %d: 0x%x -> 0x%x\n",
+		    opt->idx, opt->cp, blkaddr, (u32)opt->val);
+
+		node = malloc(F2FS_BLKSIZE);
+		ASSERT(node);
+		ret = dev_read_block(node, blkaddr);
+		ASSERT(ret >= 0);
+		F2FS_NODE_FOOTER(node)->next_blkaddr = cpu_to_le32((u32)opt->val);
+		if (IS_INODE(node))
+			ret = update_inode(sbi, node, &blkaddr);
+		else
+			ret = update_block(sbi, node, &blkaddr, NULL);
+		free(node);
+		ASSERT(ret >= 0);
+		goto out;
+	} else if (!strcmp(opt->mb, "crc")) {
+		__le32 *crc = (__le32 *)((unsigned char *)cp +
+						get_cp(checksum_offset));
+
+		MSG(0, "Info: inject crc of cp %d: 0x%x -> 0x%x\n",
+		    opt->cp, le32_to_cpu(*crc), (u32)opt->val);
+		*crc = cpu_to_le32((u32)opt->val);
+		update_crc = false;
+	} else if (!strcmp(opt->mb, "elapsed_time")) {
+		MSG(0, "Info: inject elapsed_time of cp %d: %llu -> %"PRIu64"\n",
+		    opt->cp, get_cp(elapsed_time), (u64)opt->val);
+		set_cp(elapsed_time, (u64)opt->val);
 	} else {
 		ERR_MSG("unknown or unsupported member \"%s\"\n", opt->mb);
 		ret = -EINVAL;
@@ -525,7 +651,7 @@ static int inject_cp(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	}
 
 	print_ckpt_info(sbi);
-	write_raw_cp_blocks(sbi, cp, opt->cp);
+	write_raw_cp_blocks(sbi, cp, opt->cp, update_crc);
 
 out:
 	free(buf);
@@ -533,16 +659,92 @@ out:
 	return ret;
 }
 
-static int inject_nat(struct f2fs_sb_info *sbi, struct inject_option *opt)
+static void rewrite_nat_in_journal(struct f2fs_sb_info *sbi, u32 nid,
+				   struct f2fs_nat_entry *nat)
+{
+	struct f2fs_checkpoint *cp = F2FS_CKPT(sbi);
+	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_HOT_DATA);
+	struct f2fs_journal *journal = F2FS_SUMMARY_BLOCK_JOURNAL(curseg->sum_blk);
+	block_t blkaddr;
+	int ret, i;
+
+	for (i = 0; i < nats_in_cursum(journal); i++) {
+		if (nid_in_journal(journal, i) == nid) {
+			memcpy(&nat_in_journal(journal, i), nat, sizeof(*nat));
+			break;
+		}
+	}
+
+	if (is_set_ckpt_flags(cp, CP_UMOUNT_FLAG))
+		blkaddr = sum_blk_addr(sbi, NR_CURSEG_TYPE, CURSEG_HOT_DATA);
+	else
+		blkaddr = sum_blk_addr(sbi, NR_CURSEG_DATA_TYPE, CURSEG_HOT_DATA);
+
+	ret = dev_write_block(curseg->sum_blk, blkaddr, WRITE_LIFE_NONE);
+	ASSERT(ret >= 0);
+}
+
+static block_t get_nat_addr(struct f2fs_sb_info *sbi, int nat_pack,
+			    nid_t nid, enum entry_pos *pack)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
+	block_t blkaddr;
+	unsigned int blkoff;
+
+	blkoff = NAT_BLOCK_OFFSET(nid);
+	blkaddr = nm_i->nat_blkaddr + (blkoff << 1) +
+			(blkoff & (sbi->blocks_per_seg - 1));
+	if (nat_pack == 0) // select valid nat pack
+		nat_pack = f2fs_test_bit(blkoff, nm_i->nat_bitmap) ?
+				ENT_IN_PACK2 : ENT_IN_PACK1;
+	if (nat_pack == ENT_IN_PACK2)
+		blkaddr += sbi->blocks_per_seg;
+	if (pack)
+		*pack = nat_pack;
+	return blkaddr;
+}
+
+static struct f2fs_nat_entry *get_raw_nat(struct f2fs_sb_info *sbi,
+					  struct inject_option *opt,
+					  struct f2fs_nat_block *nat_blk,
+					  enum entry_pos *pack)
+{
+	block_t blkaddr;
+	unsigned int offs;
+
+	if (lookup_nat_in_journal(sbi, opt->nid, &nat_blk->entries[0]) >= 0) {
+		offs = 0;
+		*pack = ENT_IN_JOURNAL;
+	} else {
+		blkaddr = get_nat_addr(sbi, opt->nat, opt->nid, pack);
+		ASSERT(dev_read_block(nat_blk, blkaddr) >= 0);
+		offs = opt->nid % NAT_ENTRY_PER_BLOCK;
+	}
+
+	return &nat_blk->entries[offs];
+}
+
+static void rewrite_raw_nat(struct f2fs_sb_info *sbi,
+			    struct inject_option *opt,
+			    struct f2fs_nat_block *nat_blk,
+			    enum entry_pos pack)
+{
+	block_t blkaddr;
+
+	if (pack == ENT_IN_JOURNAL) {
+		rewrite_nat_in_journal(sbi, opt->nid, &nat_blk->entries[0]);
+	} else {
+		blkaddr = get_nat_addr(sbi, opt->nat, opt->nid, NULL);
+		ASSERT(dev_write_block(nat_blk, blkaddr, WRITE_LIFE_NONE) >= 0);
+	}
+}
+
+static int inject_nat(struct f2fs_sb_info *sbi, struct inject_option *opt)
+{
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	struct f2fs_nat_block *nat_blk;
 	struct f2fs_nat_entry *ne;
-	block_t blk_addr;
-	unsigned int offs;
-	bool is_set;
-	int ret;
+	enum entry_pos pack;
 
 	if (!IS_VALID_NID(sbi, opt->nid)) {
 		ERR_MSG("Invalid nid %u range [%u:%"PRIu64"]\n", opt->nid, 0,
@@ -555,38 +757,24 @@ static int inject_nat(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	nat_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(nat_blk);
 
-	/* change NAT version bitmap temporarily to select specified pack */
-	is_set = f2fs_test_bit(opt->nid, nm_i->nat_bitmap);
-	if (opt->nat == 0) {
-		opt->nat = is_set ? 2 : 1;
-	} else {
-		if (opt->nat == 1)
-			f2fs_clear_bit(opt->nid, nm_i->nat_bitmap);
-		else
-			f2fs_set_bit(opt->nid, nm_i->nat_bitmap);
-	}
-
-	blk_addr = current_nat_addr(sbi, opt->nid, NULL);
-
-	ret = dev_read_block(nat_blk, blk_addr);
-	ASSERT(ret >= 0);
-
-	offs = opt->nid % NAT_ENTRY_PER_BLOCK;
-	ne = &nat_blk->entries[offs];
+	ne = get_raw_nat(sbi, opt, nat_blk, &pack);
 
 	if (!strcmp(opt->mb, "version")) {
 		MSG(0, "Info: inject nat entry version of nid %u "
-		    "in pack %d: %d -> %d\n", opt->nid, opt->nat,
+		    "in "PRENTPOS": %d -> %d\n", opt->nid,
+		    show_entry_pos(pack),
 		    ne->version, (u8)opt->val);
 		ne->version = (u8)opt->val;
 	} else if (!strcmp(opt->mb, "ino")) {
 		MSG(0, "Info: inject nat entry ino of nid %u "
-		    "in pack %d: %d -> %d\n", opt->nid, opt->nat,
+		    "in "PRENTPOS": %d -> %d\n", opt->nid,
+		    show_entry_pos(pack),
 		    le32_to_cpu(ne->ino), (nid_t)opt->val);
 		ne->ino = cpu_to_le32((nid_t)opt->val);
 	} else if (!strcmp(opt->mb, "block_addr")) {
 		MSG(0, "Info: inject nat entry block_addr of nid %u "
-		    "in pack %d: 0x%x -> 0x%x\n", opt->nid, opt->nat,
+		    "in "PRENTPOS": 0x%x -> 0x%x\n", opt->nid,
+		    show_entry_pos(pack),
 		    le32_to_cpu(ne->block_addr), (block_t)opt->val);
 		ne->block_addr = cpu_to_le32((block_t)opt->val);
 	} else {
@@ -596,25 +784,99 @@ static int inject_nat(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	}
 	print_raw_nat_entry_info(ne);
 
-	ret = dev_write_block(nat_blk, blk_addr, WRITE_LIFE_NONE);
-	ASSERT(ret >= 0);
-	/* restore NAT version bitmap */
-	if (is_set)
-		f2fs_set_bit(opt->nid, nm_i->nat_bitmap);
-	else
-		f2fs_clear_bit(opt->nid, nm_i->nat_bitmap);
+	rewrite_raw_nat(sbi, opt, nat_blk, pack);
 
 	free(nat_blk);
-	return ret;
+	return 0;
+}
+
+static void rewrite_sit_in_journal(struct f2fs_sb_info *sbi, unsigned int segno,
+				   struct f2fs_sit_entry *sit)
+{
+	struct f2fs_checkpoint *cp = F2FS_CKPT(sbi);
+	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_COLD_DATA);
+	struct f2fs_journal *journal = F2FS_SUMMARY_BLOCK_JOURNAL(curseg->sum_blk);
+	block_t blkaddr;
+	int ret, i;
+
+	for (i = 0; i < sits_in_cursum(journal); i++) {
+		if (segno_in_journal(journal, i) == segno) {
+			memcpy(&sit_in_journal(journal, i), sit, sizeof(*sit));
+			break;
+		}
+	}
+
+	if (is_set_ckpt_flags(cp, CP_UMOUNT_FLAG))
+		blkaddr = sum_blk_addr(sbi, NR_CURSEG_TYPE, CURSEG_COLD_DATA);
+	else
+		blkaddr = sum_blk_addr(sbi, NR_CURSEG_DATA_TYPE, CURSEG_COLD_DATA);
+
+	ret = dev_write_block(curseg->sum_blk, blkaddr, WRITE_LIFE_NONE);
+	ASSERT(ret >= 0);
+}
+
+static block_t get_sit_addr(struct f2fs_sb_info *sbi, int sit_pack,
+			    unsigned int segno, enum entry_pos *pack)
+{
+	struct sit_info *sit_i = SIT_I(sbi);
+	unsigned int blkaddr, offs;
+
+	offs = SIT_BLOCK_OFFSET(sit_i, segno);
+	blkaddr = sit_i->sit_base_addr + offs;
+	if (sit_pack == 0) // select valid sit pack
+		sit_pack = f2fs_test_bit(offs, sit_i->sit_bitmap) ?
+				ENT_IN_PACK2 : ENT_IN_PACK1;
+	if (sit_pack == ENT_IN_PACK2)
+		blkaddr += sit_i->sit_blocks;
+	if (pack)
+		*pack = sit_pack;
+	return blkaddr;
+}
+
+static struct f2fs_sit_entry *get_raw_sit(struct f2fs_sb_info *sbi,
+					  struct inject_option *opt,
+					  struct f2fs_sit_block *sit_blk,
+					  enum entry_pos *pack)
+{
+	struct sit_info *sit_i = SIT_I(sbi);
+	unsigned int segno, offs;
+	block_t blkaddr;
+
+	segno = GET_SEGNO(sbi, opt->blk);
+	if (lookup_sit_in_journal(sbi, segno, &sit_blk->entries[0]) >= 0) {
+		offs = 0;
+		*pack = ENT_IN_JOURNAL;
+	} else {
+		blkaddr = get_sit_addr(sbi, opt->sit, segno, pack);
+		ASSERT(dev_read_block(sit_blk, blkaddr) >= 0);
+		offs = SIT_ENTRY_OFFSET(sit_i, segno);
+	}
+
+	return &sit_blk->entries[offs];
+}
+
+static void rewrite_raw_sit(struct f2fs_sb_info *sbi,
+			    struct inject_option *opt,
+			    struct f2fs_sit_block *sit_blk,
+			    enum entry_pos pack)
+{
+	unsigned int segno;
+	block_t blkaddr;
+
+	segno = GET_SEGNO(sbi, opt->blk);
+	if (pack == ENT_IN_JOURNAL) {
+		rewrite_sit_in_journal(sbi, segno, &sit_blk->entries[0]);
+	} else {
+		blkaddr = get_sit_addr(sbi, opt->sit, segno, NULL);
+		ASSERT(dev_write_block(sit_blk, blkaddr, WRITE_LIFE_NONE) >= 0);
+	}
 }
 
 static int inject_sit(struct f2fs_sb_info *sbi, struct inject_option *opt)
 {
-	struct sit_info *sit_i = SIT_I(sbi);
 	struct f2fs_sit_block *sit_blk;
 	struct f2fs_sit_entry *sit;
-	unsigned int segno, offs;
-	bool is_set;
+	enum entry_pos pack;
 
 	if (!f2fs_is_valid_blkaddr(sbi, opt->blk, DATA_GENERIC)) {
 		ERR_MSG("Invalid blkaddr 0x%x (valid range [0x%x:0x%lx])\n",
@@ -626,30 +888,18 @@ static int inject_sit(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	sit_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(sit_blk);
 
-	segno = GET_SEGNO(sbi, opt->blk);
-	/* change SIT version bitmap temporarily to select specified pack */
-	is_set = f2fs_test_bit(segno, sit_i->sit_bitmap);
-	if (opt->sit == 0) {
-		opt->sit = is_set ? 2 : 1;
-	} else {
-		if (opt->sit == 1)
-			f2fs_clear_bit(segno, sit_i->sit_bitmap);
-		else
-			f2fs_set_bit(segno, sit_i->sit_bitmap);
-	}
-	get_current_sit_page(sbi, segno, sit_blk);
-	offs = SIT_ENTRY_OFFSET(sit_i, segno);
-	sit = &sit_blk->entries[offs];
+	sit = get_raw_sit(sbi, opt, sit_blk, &pack);
 
 	if (!strcmp(opt->mb, "vblocks")) {
 		MSG(0, "Info: inject sit entry vblocks of block 0x%x "
-		    "in pack %d: %u -> %u\n", opt->blk, opt->sit,
+		    "in "PRENTPOS": %u -> %u\n", opt->blk,
+		    show_entry_pos(pack),
 		    le16_to_cpu(sit->vblocks), (u16)opt->val);
 		sit->vblocks = cpu_to_le16((u16)opt->val);
 	} else if (!strcmp(opt->mb, "valid_map")) {
 		if (opt->idx == -1) {
-			MSG(0, "Info: auto idx = %u\n", offs);
-			opt->idx = offs;
+			opt->idx = OFFSET_IN_SEG(sbi, opt->blk);
+			MSG(0, "Info: auto idx = %u\n", opt->idx);
 		}
 		if (opt->idx >= SIT_VBLOCK_MAP_SIZE) {
 			ERR_MSG("invalid idx %u of valid_map[]\n", opt->idx);
@@ -657,8 +907,9 @@ static int inject_sit(struct f2fs_sb_info *sbi, struct inject_option *opt)
 			return -ERANGE;
 		}
 		MSG(0, "Info: inject sit entry valid_map[%d] of block 0x%x "
-		    "in pack %d: 0x%02x -> 0x%02x\n", opt->idx, opt->blk,
-		    opt->sit, sit->valid_map[opt->idx], (u8)opt->val);
+		    "in "PRENTPOS": 0x%02x -> 0x%02x\n", opt->idx, opt->blk,
+		    show_entry_pos(pack),
+		    sit->valid_map[opt->idx], (u8)opt->val);
 		sit->valid_map[opt->idx] = (u8)opt->val;
 	} else if (!strcmp(opt->mb, "mtime")) {
 		MSG(0, "Info: inject sit entry mtime of block 0x%x "
@@ -672,12 +923,7 @@ static int inject_sit(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	}
 	print_raw_sit_entry_info(sit);
 
-	rewrite_current_sit_page(sbi, segno, sit_blk);
-	/* restore SIT version bitmap */
-	if (is_set)
-		f2fs_set_bit(segno, sit_i->sit_bitmap);
-	else
-		f2fs_clear_bit(segno, sit_i->sit_bitmap);
+	rewrite_raw_sit(sbi, opt, sit_blk, pack);
 
 	free(sit_blk);
 	return 0;
@@ -794,16 +1040,43 @@ static int inject_inode(struct f2fs_sb_info *sbi, struct f2fs_node *node,
 		MSG(0, "Info: inject inode i_blocks of nid %u: %"PRIu64" -> %"PRIu64"\n",
 		    opt->nid, le64_to_cpu(inode->i_blocks), (u64)opt->val);
 		inode->i_blocks = cpu_to_le64((u64)opt->val);
+	} else if (!strcmp(opt->mb, "i_xattr_nid")) {
+		MSG(0, "Info: inject inode i_xattr_nid of nid %u: %u -> %u\n",
+		    opt->nid, le32_to_cpu(inode->i_xattr_nid), (u32)opt->val);
+		inode->i_xattr_nid = cpu_to_le32((u32)opt->val);
+	} else if (!strcmp(opt->mb, "i_ext.fofs")) {
+		MSG(0, "Info: inject inode i_ext.fofs of nid %u: %u -> %u\n",
+		    opt->nid, le32_to_cpu(inode->i_ext.fofs), (u32)opt->val);
+		inode->i_ext.fofs = cpu_to_le32((u32)opt->val);
+	} else if (!strcmp(opt->mb, "i_ext.blk_addr")) {
+		MSG(0, "Info: inject inode i_ext.blk_addr of nid %u: "
+		    "0x%x -> 0x%x\n", opt->nid,
+		    le32_to_cpu(inode->i_ext.blk_addr), (u32)opt->val);
+		inode->i_ext.blk_addr = cpu_to_le32((u32)opt->val);
+	} else if (!strcmp(opt->mb, "i_ext.len")) {
+		MSG(0, "Info: inject inode i_ext.len of nid %u: %u -> %u\n",
+		    opt->nid, le32_to_cpu(inode->i_ext.len), (u32)opt->val);
+		inode->i_ext.len = cpu_to_le32((u32)opt->val);
 	} else if (!strcmp(opt->mb, "i_extra_isize")) {
 		/* do not care if F2FS_EXTRA_ATTR is enabled */
 		MSG(0, "Info: inject inode i_extra_isize of nid %u: %d -> %d\n",
 		    opt->nid, le16_to_cpu(inode->i_extra_isize), (u16)opt->val);
 		inode->i_extra_isize = cpu_to_le16((u16)opt->val);
+	} else if (!strcmp(opt->mb, "i_inline_xattr_size")) {
+		MSG(0, "Info: inject inode i_inline_xattr_size of nid %u: "
+		    "%d -> %d\n", opt->nid,
+		    le16_to_cpu(inode->i_inline_xattr_size), (u16)opt->val);
+		inode->i_inline_xattr_size = cpu_to_le16((u16)opt->val);
 	} else if (!strcmp(opt->mb, "i_inode_checksum")) {
 		MSG(0, "Info: inject inode i_inode_checksum of nid %u: "
 		    "0x%x -> 0x%x\n", opt->nid,
 		    le32_to_cpu(inode->i_inode_checksum), (u32)opt->val);
 		inode->i_inode_checksum = cpu_to_le32((u32)opt->val);
+	} else if (!strcmp(opt->mb, "i_compr_blocks")) {
+		MSG(0, "Info: inject inode i_compr_blocks of nid %u: "
+		    "%"PRIu64" -> %"PRIu64"\n", opt->nid,
+		    le64_to_cpu(inode->i_compr_blocks), (u64)opt->val);
+		inode->i_compr_blocks = cpu_to_le64((u64)opt->val);
 	} else if (!strcmp(opt->mb, "i_addr")) {
 		/* do not care if it is inline data */
 		if (opt->idx >= DEF_ADDRS_PER_INODE) {
@@ -945,12 +1218,12 @@ static int find_dir_entry(struct f2fs_dentry_ptr *d, nid_t ino)
 		}
 
 		de = &d->dentry[slot];
-		if (le32_to_cpu(de->ino) == ino && de->hash_code != 0)
-			return slot;
 		if (de->name_len == 0) {
 			slot++;
 			continue;
 		}
+		if (le32_to_cpu(de->ino) == ino)
+			return slot;
 		slot += GET_DENTRY_SLOTS(le16_to_cpu(de->name_len));
 	}
 
@@ -963,14 +1236,15 @@ static int inject_dentry(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	struct f2fs_node *node_blk = NULL;
 	struct f2fs_inode *inode;
 	struct f2fs_dentry_ptr d;
-	void *inline_dentry;
+	void *buf = NULL, *inline_dentry;
 	struct f2fs_dentry_block *dent_blk = NULL;
 	block_t addr = 0;
-	void *buf = NULL;
 	struct f2fs_dir_entry *dent = NULL;
 	struct dnode_of_data dn;
 	nid_t pino;
-	int slot = -ENOENT, ret;
+	int slot = -ENOENT, namelen, namecap, ret;
+	unsigned int dentry_hash;
+	char *name;
 
 	node_blk = malloc(F2FS_BLKSIZE);
 	ASSERT(node_blk != NULL);
@@ -979,12 +1253,25 @@ static int inject_dentry(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	get_node_info(sbi, opt->nid, &ni);
 	ret = dev_read_block(node_blk, ni.blk_addr);
 	ASSERT(ret >= 0);
-	pino = le32_to_cpu(node_blk->i.i_pino);
 
-	/* get parent inode */
-	get_node_info(sbi, pino, &ni);
-	ret = dev_read_block(node_blk, ni.blk_addr);
-	ASSERT(ret >= 0);
+	if (opt->dots) {
+		if (!LINUX_S_ISDIR(le16_to_cpu(node_blk->i.i_mode))) {
+			ERR_MSG("ino %u is not a directory, cannot inject "
+				"its %s\n", opt->nid,
+				opt->dots == TYPE_DOT ? "." : "..");
+			ret = -EINVAL;
+			goto out;
+		}
+		/* pino is itself */
+		pino = opt->nid;
+	} else {
+		pino = le32_to_cpu(node_blk->i.i_pino);
+
+		/* get parent inode */
+		get_node_info(sbi, pino, &ni);
+		ret = dev_read_block(node_blk, ni.blk_addr);
+		ASSERT(ret >= 0);
+	}
 	inode = &node_blk->i;
 
 	/* find child dentry */
@@ -994,7 +1281,10 @@ static int inject_dentry(struct f2fs_sb_info *sbi, struct inject_option *opt)
 		addr = ni.blk_addr;
 		buf = node_blk;
 
-		slot = find_dir_entry(&d, opt->nid);
+		if (opt->dots == TYPE_DOTDOT)
+			slot = find_dir_entry(&d, le32_to_cpu(node_blk->i.i_pino));
+		else
+			slot = find_dir_entry(&d, opt->nid);
 		if (slot >= 0)
 			dent = &d.dentry[slot];
 	} else {
@@ -1030,7 +1320,10 @@ static int inject_dentry(struct f2fs_sb_info *sbi, struct inject_option *opt)
 			ASSERT(ret >= 0);
 
 			make_dentry_ptr(&d, node_blk, dent_blk, 1);
-			slot = find_dir_entry(&d, opt->nid);
+			if (opt->dots == TYPE_DOTDOT)
+				slot = find_dir_entry(&d, le32_to_cpu(node_blk->i.i_pino));
+			else
+				slot = find_dir_entry(&d, opt->nid);
 			if (slot >= 0) {
 				dent = &d.dentry[slot];
 				buf = dent_blk;
@@ -1064,6 +1357,36 @@ static int inject_dentry(struct f2fs_sb_info *sbi, struct inject_option *opt)
 		    "%d -> %d\n", opt->nid, dent->file_type,
 		    (u8)opt->val);
 		dent->file_type = (u8)opt->val;
+	} else if (!strcmp(opt->mb, "filename")) {
+		if (!opt->str) {
+			ERR_MSG("option str is needed\n");
+			ret = -EINVAL;
+			goto out;
+		}
+		namecap = ALIGN_UP(le16_to_cpu(dent->name_len), F2FS_SLOT_LEN);
+		namelen = strlen(opt->str);
+		if (namelen > namecap || namelen > F2FS_NAME_LEN) {
+			ERR_MSG("option str too long\n");
+			ret = -EINVAL;
+			goto out;
+		}
+		name = (char *)d.filename[slot];
+		MSG(0, "Info: inject dentry filename of nid %u: "
+		    "%.*s -> %s\n", opt->nid, le16_to_cpu(dent->name_len),
+		    name, opt->str);
+		memcpy(name, opt->str, namelen);
+		MSG(0, "Info: inject dentry namelen of nid %u: "
+		    "%d -> %d\n", opt->nid, le16_to_cpu(dent->name_len),
+		    namelen);
+		dent->name_len = cpu_to_le16(namelen);
+		dentry_hash = f2fs_dentry_hash(get_encoding(sbi),
+						IS_CASEFOLDED(inode),
+						(unsigned char *)name,
+						namelen);
+		MSG(0, "Info: inject dentry d_hash of nid %u: "
+		    "0x%x -> 0x%x\n", opt->nid, le32_to_cpu(dent->hash_code),
+		    dentry_hash);
+		dent->hash_code = cpu_to_le32(dentry_hash);
 	} else {
 		ERR_MSG("unknown or unsupported member \"%s\"\n", opt->mb);
 		ret = -EINVAL;
@@ -1089,6 +1412,9 @@ int do_inject(struct f2fs_sb_info *sbi)
 	struct inject_option *opt = (struct inject_option *)c.private;
 	int ret = -EINVAL;
 
+	if (c.zoned_model == F2FS_ZONED_HM)
+		fsck_init(sbi);
+
 	if (opt->sb >= 0)
 		ret = inject_sb(sbi, opt);
 	else if (opt->cp >= 0)
@@ -1103,6 +1429,16 @@ int do_inject(struct f2fs_sb_info *sbi)
 		ret = inject_node(sbi, opt);
 	else if (opt->dent)
 		ret = inject_dentry(sbi, opt);
+
+	if (c.zoned_model == F2FS_ZONED_HM) {
+		if (!ret && (opt->node || opt->dent)) {
+			write_curseg_info(sbi);
+			flush_journal_entries(sbi);
+			flush_sit_entries(sbi);
+			write_checkpoint(sbi);
+		}
+		fsck_free(sbi);
+	}
 
 	return ret;
 }

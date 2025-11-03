@@ -86,6 +86,7 @@ void fsck_usage()
 	MSG(0, "  -t show directory tree\n");
 	MSG(0, "  -q preserve quota limits\n");
 	MSG(0, "  -y fix all the time\n");
+	MSG(0, "  -N answer \"No\" for all questions\n");
 	MSG(0, "  -V print the version number and exit\n");
 	MSG(0, "  --dry-run do not really fix corruptions\n");
 	MSG(0, "  --no-kernel-check skips detecting kernel change\n");
@@ -114,6 +115,7 @@ void dump_usage()
 	MSG(0, "  -f do not prompt before dumping\n");
 	MSG(0, "  -H support write hint\n");
 	MSG(0, "  -y alias for -f\n");
+	MSG(0, "  -N answer \"No\" for all questions\n");
 	MSG(0, "  -o dump inodes to the given path\n");
 	MSG(0, "  -P preserve mode/owner/group for dumped inode\n");
 	MSG(0, "  -L Preserves symlinks. Otherwise symlinks are dumped as regular files.\n");
@@ -266,7 +268,7 @@ void f2fs_parse_options(int argc, char *argv[])
 	}
 
 	if (!strcmp("fsck.f2fs", prog)) {
-		const char *option_string = ":aC:c:m:Md:fg:HlO:p:q:StyV";
+		const char *option_string = ":aC:c:m:Md:fg:HlO:p:q:StyNV";
 		int opt = 0, val;
 		char *token;
 		struct option long_opt[] = {
@@ -399,6 +401,9 @@ void f2fs_parse_options(int argc, char *argv[])
 				c.force = 1;
 				MSG(0, "Info: Force to fix corruption\n");
 				break;
+			case 'N':
+				c.answer_no = true;
+				break;
 			case 'q':
 				c.preserve_limits = atoi(optarg);
 				MSG(0, "Info: Preserve quota limits = %d\n",
@@ -452,7 +457,7 @@ void f2fs_parse_options(int argc, char *argv[])
 		}
 	} else if (!strcmp("dump.f2fs", prog)) {
 #ifdef WITH_DUMP
-		const char *option_string = "d:fi:I:n:LMo:Prs:Sa:b:Vy";
+		const char *option_string = "d:fi:I:n:LMo:Prs:Sa:b:VyN";
 		static struct dump_option dump_opt = {
 			.nid = 0,	/* default root ino */
 			.start_nat = -1,
@@ -529,6 +534,9 @@ void f2fs_parse_options(int argc, char *argv[])
 			case 'y':
 			case 'f':
 				c.force = 1;
+				break;
+			case 'N':
+				c.answer_no = true;
 				break;
 			case 'r':
 				dump_opt.use_root_nid = 1;
@@ -1372,7 +1380,7 @@ fsck_again:
 
 	f2fs_do_umount(sbi);
 
-	if (c.func == FSCK && c.bug_on) {
+	if (c.func == FSCK && c.bug_on && !c.answer_no) {
 		if (!c.ro && c.fix_on == 0 && c.auto_fix == 0 && !c.dry_run) {
 			char ans[255] = {0};
 retry:

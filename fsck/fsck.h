@@ -223,6 +223,8 @@ extern int f2fs_ra_meta_pages(struct f2fs_sb_info *, block_t, int, int);
 extern int f2fs_do_mount(struct f2fs_sb_info *);
 extern void f2fs_do_umount(struct f2fs_sb_info *);
 extern int f2fs_sparse_initialize_meta(struct f2fs_sb_info *);
+extern int f2fs_find_fsync_inode(struct f2fs_sb_info *, struct list_head *);
+extern void f2fs_destroy_fsync_dnodes(struct list_head *);
 
 extern void flush_journal_entries(struct f2fs_sb_info *);
 extern void update_curseg_info(struct f2fs_sb_info *, int);
@@ -239,7 +241,7 @@ extern void duplicate_checkpoint(struct f2fs_sb_info *);
 extern void write_checkpoint(struct f2fs_sb_info *);
 extern void write_checkpoints(struct f2fs_sb_info *);
 extern void write_raw_cp_blocks(struct f2fs_sb_info *sbi,
-			struct f2fs_checkpoint *cp, int which);
+			struct f2fs_checkpoint *cp, int which, bool update_crc);
 extern void update_superblock(struct f2fs_super_block *, int);
 extern void update_data_blkaddr(struct f2fs_sb_info *, nid_t, u16, block_t,
 			struct f2fs_node *);

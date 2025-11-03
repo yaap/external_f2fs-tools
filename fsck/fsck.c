@@ -3848,7 +3848,7 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 	}
 
 #ifndef WITH_ANDROID
-	if (nr_unref_nid && !c.ro) {
+	if (nr_unref_nid && !c.ro && !c.answer_no) {
 		char ans[255] = {0};
 		int res;
 

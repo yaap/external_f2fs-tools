@@ -194,6 +194,7 @@ AC_CHECK_FUNCS_ONCE([
 	keyctl
 	memset
 	pread
+	preadv2
 	pwrite
 	setmntent
 ])

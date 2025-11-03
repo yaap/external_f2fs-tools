@@ -429,7 +429,7 @@ int f2fs_reset_zone(int i, void *blkzone)
 	struct blk_zone_range range;
 	int ret;
 
-	if (!blk_zone_seq(blkz) || blk_zone_empty(blkz))
+	if (!blk_zone_seq(blkz) || blk_zone_empty(blkz) || c.dry_run)
 		return 0;
 
 	/* Non empty sequential zone: reset */
@@ -484,7 +484,7 @@ int f2fs_reset_zones(int j)
 		blkz = (struct blk_zone *)(rep + 1);
 		for (i = 0; i < rep->nr_zones && sector < total_sectors; i++) {
 			if (blk_zone_seq(blkz) &&
-			    !blk_zone_empty(blkz)) {
+			    !blk_zone_empty(blkz) && !c.dry_run) {
 				/* Non empty sequential zone: reset */
 				range.sector = blk_zone_sector(blkz);
 				range.nr_sectors = blk_zone_length(blkz);
@@ -513,7 +513,7 @@ int f2fs_finish_zone(int i, void *blkzone)
 	struct blk_zone_range range;
 	int ret;
 
-	if (!blk_zone_seq(blkz) || !blk_zone_open(blkz))
+	if (!blk_zone_seq(blkz) || !blk_zone_open(blkz) || c.dry_run)
 		return 0;
 
 	/* Non empty sequential zone: finish */

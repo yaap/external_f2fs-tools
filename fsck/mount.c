@@ -730,6 +730,7 @@ static char *stop_reason_str[] = {
 	[STOP_CP_REASON_FLUSH_FAIL]		= "flush_fail",
 	[STOP_CP_REASON_NO_SEGMENT]		= "no_segment",
 	[STOP_CP_REASON_CORRUPTED_FREE_BITMAP]	= "corrupted_free_bitmap",
+	[STOP_CP_REASON_CORRUPTED_NID]		= "corrupted nid",
 };
 
 void print_sb_stop_reason(struct f2fs_super_block *sb)
@@ -1358,8 +1359,11 @@ void *validate_checkpoint(struct f2fs_sb_info *sbi, block_t cp_addr,
 		return NULL;
 
 	cp = (struct f2fs_checkpoint *)cp_page_1;
-	if (get_cp(cp_pack_total_block_count) > sbi->blocks_per_seg)
+	if (get_cp(cp_pack_total_block_count) > sbi->blocks_per_seg) {
+		MSG(0, "\tInvalid CP pack block count: %u\n",
+		    get_cp(cp_pack_total_block_count));
 		goto invalid_cp1;
+	}
 
 	pre_version = get_cp(checkpoint_ver);
 
@@ -1423,14 +1427,16 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 			sbi->cur_cp = 1;
 			version = cp1_version;
 		}
-	} else if (cp1) {
+	} else if (cp1) { // cp2 is invalidate
 		cur_page = cp1;
 		sbi->cur_cp = 1;
 		version = cp1_version;
-	} else if (cp2) {
+		set_ckpt_flags(cp1, CP_FSCK_FLAG);
+	} else if (cp2) { // cp1 is invalidate
 		cur_page = cp2;
 		sbi->cur_cp = 2;
 		version = cp2_version;
+		set_ckpt_flags(cp2, CP_FSCK_FLAG);
 	} else
 		goto fail_no_cp;
 
@@ -1693,7 +1699,7 @@ static int f2fs_early_init_nid_bitmap(struct f2fs_sb_info *sbi)
 			continue;
 		}
 
-		nid = le32_to_cpu(nid_in_journal(journal, i));
+		nid = nid_in_journal(journal, i);
 		if (!IS_VALID_NID(sbi, nid)) {
 			MSG(0, "\tError: f2fs_init_nid_bitmap: nid(%u) is invalid!!!\n", nid);
 			journal->n_nats = cpu_to_le16(i);
@@ -2572,7 +2578,7 @@ void update_nat_blkaddr(struct f2fs_sb_info *sbi, nid_t ino,
 	int ret, i;
 
 	for (i = 0; i < nats_in_cursum(journal); i++) {
-		if (le32_to_cpu(nid_in_journal(journal, i)) == nid) {
+		if (nid_in_journal(journal, i) == nid) {
 			entry = &nat_in_journal(journal, i);
 			entry->block_addr = cpu_to_le32(newaddr);
 			if (ino)
@@ -2676,7 +2682,7 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 	}
 
 	for (i = 0; i < sits_in_cursum(journal); i++) {
-		segno = le32_to_cpu(segno_in_journal(journal, i));
+		segno = segno_in_journal(journal, i);
 
 		if (segno >= MAIN_SEGS(sbi)) {
 			MSG(0, "\tError: build_sit_entries: segno(%u) is invalid!!!\n", segno);
@@ -2882,7 +2888,7 @@ next:
 		return i;
 	}
 
-	nid = le32_to_cpu(nid_in_journal(journal, i));
+	nid = nid_in_journal(journal, i);
 
 	entry_off = nid % NAT_ENTRY_PER_BLOCK;
 	block_addr = current_nat_addr(sbi, nid, NULL);
@@ -3281,10 +3287,28 @@ int lookup_nat_in_journal(struct f2fs_sb_info *sbi, u32 nid,
 	int i = 0;
 
 	for (i = 0; i < nats_in_cursum(journal); i++) {
-		if (le32_to_cpu(nid_in_journal(journal, i)) == nid) {
+		if (nid_in_journal(journal, i) == nid) {
 			memcpy(raw_nat, &nat_in_journal(journal, i),
 						sizeof(struct f2fs_nat_entry));
 			DBG(3, "==> Found nid [0x%x] in nat cache\n", nid);
+			return i;
+		}
+	}
+	return -1;
+}
+
+int lookup_sit_in_journal(struct f2fs_sb_info *sbi, unsigned int segno,
+					struct f2fs_sit_entry *raw_sit)
+{
+	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_COLD_DATA);
+	struct f2fs_journal *journal = F2FS_SUMMARY_BLOCK_JOURNAL(curseg->sum_blk);
+	int i;
+
+	for (i = 0; i < sits_in_cursum(journal); i++) {
+		if (segno_in_journal(journal, i) == segno) {
+			memcpy(raw_sit, &sit_in_journal(journal, i),
+						sizeof(struct f2fs_sit_entry));
+			DBG(3, "==> Found sit [0x%x] in sit cache\n", segno);
 			return i;
 		}
 	}
@@ -3306,7 +3330,7 @@ void nullify_nat_entry(struct f2fs_sb_info *sbi, u32 nid)
 
 	/* check in journal */
 	for (i = 0; i < nats_in_cursum(journal); i++) {
-		if (le32_to_cpu(nid_in_journal(journal, i)) == nid) {
+		if (nid_in_journal(journal, i) == nid) {
 			memset(&nat_in_journal(journal, i), 0,
 					sizeof(struct f2fs_nat_entry));
 			FIX_MSG("Remove nid [0x%x] in nat journal", nid);
@@ -3486,17 +3510,19 @@ void write_checkpoints(struct f2fs_sb_info *sbi)
 	write_checkpoint(sbi);
 }
 
-void write_raw_cp_blocks(struct f2fs_sb_info *sbi,
-			 struct f2fs_checkpoint *cp, int which)
+void write_raw_cp_blocks(struct f2fs_sb_info *sbi, struct f2fs_checkpoint *cp,
+			 int which, bool update_crc)
 {
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	uint32_t crc;
 	block_t cp_blkaddr;
 	int ret;
 
-	crc = f2fs_checkpoint_chksum(cp);
-	*((__le32 *)((unsigned char *)cp + get_cp(checksum_offset))) =
+	if (update_crc) {
+		crc = f2fs_checkpoint_chksum(cp);
+		*((__le32 *)((unsigned char *)cp + get_cp(checksum_offset))) =
 							cpu_to_le32(crc);
+	}
 
 	cp_blkaddr = get_sb(cp_blkaddr);
 	if (which == 2)
@@ -3610,7 +3636,7 @@ void build_nat_area_bitmap(struct f2fs_sb_info *sbi)
 	/* Traverse nat journal, update the corresponding entries */
 	for (i = 0; i < nats_in_cursum(journal); i++) {
 		struct f2fs_nat_entry raw_nat;
-		nid = le32_to_cpu(nid_in_journal(journal, i));
+		nid = nid_in_journal(journal, i);
 		ni.nid = nid;
 
 		DBG(3, "==> Found nid [0x%x] in nat cache, update it\n", nid);
@@ -3730,7 +3756,7 @@ static void del_fsync_inode(struct fsync_inode_entry *entry)
 	free(entry);
 }
 
-static void destroy_fsync_dnodes(struct list_head *head)
+void f2fs_destroy_fsync_dnodes(struct list_head *head)
 {
 	struct fsync_inode_entry *entry, *tmp;
 
@@ -3836,7 +3862,7 @@ static int sanity_check_node_chain(struct f2fs_sb_info *sbi,
 	return 0;
 }
 
-static int find_fsync_inode(struct f2fs_sb_info *sbi, struct list_head *head)
+int f2fs_find_fsync_inode(struct f2fs_sb_info *sbi, struct list_head *head)
 {
 	struct curseg_info *curseg;
 	struct f2fs_node *node_blk, *node_blk_fast;
@@ -4032,7 +4058,7 @@ static int record_fsync_data(struct f2fs_sb_info *sbi)
 	if (!need_fsync_data_record(sbi))
 		return 0;
 
-	ret = find_fsync_inode(sbi, &inode_list);
+	ret = f2fs_find_fsync_inode(sbi, &inode_list);
 	if (ret)
 		goto out;
 
@@ -4047,7 +4073,7 @@ static int record_fsync_data(struct f2fs_sb_info *sbi)
 
 	ret = traverse_dnodes(sbi, &inode_list);
 out:
-	destroy_fsync_dnodes(&inode_list);
+	f2fs_destroy_fsync_dnodes(&inode_list);
 	return ret;
 }
 

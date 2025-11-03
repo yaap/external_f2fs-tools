@@ -497,11 +497,12 @@ static int f2fs_prepare_super_block(void)
 			get_sb(segment_count_nat))) *
 			c.blks_per_seg;
 
-	if (c.feature & F2FS_FEATURE_RO)
+	if (c.feature & F2FS_FEATURE_RO) {
 		blocks_for_ssa = 0;
-	else
-		blocks_for_ssa = total_valid_blks_available /
-				c.blks_per_seg + 1;
+	} else {
+		ASSERT((total_valid_blks_available % c.blks_per_seg) == 0);
+		blocks_for_ssa = total_valid_blks_available / c.blks_per_seg;
+	}
 
 	set_sb(segment_count_ssa, SEG_ALIGN(blocks_for_ssa));
 
