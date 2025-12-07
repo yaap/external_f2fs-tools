@@ -143,7 +143,8 @@ static void add_default_options(void)
 		force_overwrite = 1;
 		c.wanted_sector_size = F2FS_BLKSIZE;
 		c.root_uid = c.root_gid = 0;
-		c.disabled_feature |= F2FS_FEATURE_NAT_BITS;
+		c.disabled_feature |= F2FS_FEATURE_NAT_BITS |
+					F2FS_FEATURE_LINEAR_LOOKUP;
 
 		/* RO doesn't need any other features */
 		if (c.feature & F2FS_FEATURE_RO)
@@ -384,6 +385,12 @@ static void f2fs_parse_options(int argc, char *argv[])
 		mkfs_usage();
 	}
 
+	if (c.ndevs > 1 && strlen(argv[optind]) > MAX_PATH_LEN) {
+		MSG(0, "Error: main device path %s should be equal or "
+				"less than %d characters\n",
+				argv[optind], MAX_PATH_LEN);
+		mkfs_usage();
+	}
 	/* [0] : META, [1 to MAX_DEVICES - 1] : NODE/DATA */
 	c.devices[0].path = strdup(argv[optind]);
 

@@ -339,17 +339,6 @@ static int f2fs_prepare_super_block(void)
 	MSG(0, "Info: zone aligned segment0 blkaddr: %u\n",
 					get_sb(segment0_blkaddr));
 
-	if (c.zoned_mode &&
-		((c.ndevs == 1 &&
-			(get_sb(segment0_blkaddr) + c.start_sector /
-			DEFAULT_SECTORS_PER_BLOCK) % c.zone_blocks) ||
-		(c.ndevs > 1 &&
-			c.devices[1].start_blkaddr % c.zone_blocks))) {
-		MSG(1, "\tError: Unaligned segment0 block address %u\n",
-				get_sb(segment0_blkaddr));
-		return -1;
-	}
-
 	for (i = 0; i < c.ndevs; i++) {
 		if (i == 0) {
 			c.devices[i].total_segments =
@@ -390,6 +379,35 @@ static int f2fs_prepare_super_block(void)
 
 		c.total_segments += c.devices[i].total_segments;
 	}
+
+	if (c.zoned_mode) {
+		if (c.ndevs == 1 &&
+			(get_sb(segment0_blkaddr) + c.start_sector /
+			DEFAULT_SECTORS_PER_BLOCK) % c.zone_blocks) {
+			/*
+			 * With a sole zoned LU, segment0 start should be
+			 * aligned at the zone.
+			 */
+			MSG(1, "\tError: Unaligned segment0 start (%u) for zoned LU (zone_blocks: %"PRIu64")\n",
+				get_sb(segment0_blkaddr),
+				(uint64_t)c.zone_blocks);
+			return -1;
+		} else if (c.ndevs > 1 &&
+			(c.devices[1].start_blkaddr - get_sb(segment0_blkaddr)) % c.zone_blocks) {
+			/*
+			 * With the first device as a conventional LU and the
+			 * second as a zoned LU, the start address for the zoned
+			 * LU should be aligned to the zone size, starting from
+			 * segment0.
+			 */
+			MSG(1, "\tError: Unaligned start (%"PRIu64") for zoned LU from segment0 (%u) (zone_blocks: %"PRIu64")\n",
+				c.devices[1].start_blkaddr,
+				get_sb(segment0_blkaddr),
+				(uint64_t)c.zone_blocks);
+			return -1;
+		}
+	}
+
 	set_sb(segment_count, c.total_segments);
 	set_sb(segment_count_ckpt, F2FS_NUMBER_OF_CHECKPOINT_PACK);
 
@@ -671,6 +689,17 @@ static int f2fs_prepare_super_block(void)
 	memcpy(sb->init_version, c.version, VERSION_LEN);
 
 	if (c.feature & F2FS_FEATURE_CASEFOLD) {
+		/*
+		 * if [no]hashonly option is not assigned, let's disable
+		 * linear lookup fallback by default for Android case.
+		 */
+		if ((c.nolinear_lookup == LINEAR_LOOKUP_DEFAULT) &&
+			(c.disabled_feature & F2FS_FEATURE_LINEAR_LOOKUP)) {
+			c.s_encoding_flags |= F2FS_ENC_NO_COMPAT_FALLBACK_FL;
+			MSG(0, "Info: set default linear_lookup option: %s\n",
+				c.s_encoding_flags & F2FS_ENC_NO_COMPAT_FALLBACK_FL ?
+				"disable" : "enable");
+		}
 		set_sb(s_encoding, c.s_encoding);
 		set_sb(s_encoding_flags, c.s_encoding_flags);
 	}

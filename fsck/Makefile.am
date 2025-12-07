@@ -21,3 +21,11 @@ install-data-hook:
 	ln -sf fsck.f2fs $(DESTDIR)/$(sbindir)/sload.f2fs
 	ln -sf fsck.f2fs $(DESTDIR)/$(sbindir)/f2fslabel
 	ln -sf fsck.f2fs $(DESTDIR)/$(sbindir)/inject.f2fs
+
+uninstall-hook:
+	-rm -f $(DESTDIR)/$(sbindir)/dump.f2fs
+	-rm -f $(DESTDIR)/$(sbindir)/defrag.f2fs
+	-rm -f $(DESTDIR)/$(sbindir)/resize.f2fs
+	-rm -f $(DESTDIR)/$(sbindir)/sload.f2fs
+	-rm -f $(DESTDIR)/$(sbindir)/f2fslabel
+	-rm -f $(DESTDIR)/$(sbindir)/inject.f2fs

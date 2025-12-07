@@ -232,9 +232,16 @@ Use UTF-8 for casefolding.
 .I flags:
 .RS 1.2i
 .TP 1.2i
-.B strict
+.B [no]strict
 This flag specifies that invalid strings should be rejected by the filesystem.
 Default is disabled.
+.RE
+.RS 1.2i
+.TP 1.2i
+.B [no]hashonly
+This flag specifies that linear lookup fallback is off during lookup, to turn
+on linear lookup fallback, use nohashonly flag.
+For android case, it will disable linear lookup by default.
 .RE
 .RE
 .TP
