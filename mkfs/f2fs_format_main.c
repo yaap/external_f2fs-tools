@@ -179,8 +179,6 @@ static void add_default_options(void)
 		c.feature |= F2FS_FEATURE_QUOTA_INO;
 		c.quota_bits |= QUOTA_PRJ_BIT;
 	}
-	if (c.blksize != F2FS_SUM_BLKSIZE)
-		c.feature |= F2FS_FEATURE_PACKED_SSA;
 }
 
 static void f2fs_parse_options(int argc, char *argv[])

@@ -935,6 +935,7 @@ static int inject_ssa(struct f2fs_sb_info *sbi, struct inject_option *opt)
 	struct summary_footer *footer;
 	struct f2fs_summary *sum;
 	u32 segno, offset;
+	block_t ssa_blkaddr;
 	int type;
 	int ret;
 
@@ -999,7 +1000,8 @@ static int inject_ssa(struct f2fs_sb_info *sbi, struct inject_option *opt)
 
 	print_sum_footer_info(footer);
 
-	ret = write_sum_block(sbi, sum_blk, segno, WRITE_LIFE_NONE);
+	ssa_blkaddr = GET_SUM_BLKADDR(sbi, segno);
+	ret = dev_write_block(sum_blk, ssa_blkaddr, WRITE_LIFE_NONE);
 	ASSERT(ret >= 0);
 
 out:

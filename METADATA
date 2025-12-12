@@ -11,13 +11,13 @@ third_party {
   }
   last_upgrade_date {
     year: 2025
-    month: 12
-    day: 11
+    month: 10
+    day: 24
   }
   homepage: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git/"
   identifier {
     type: "Git"
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git"
-    version: "4cd565d20c6304efaa4126c0dde2eb1892e1264c"
+    version: "fa02bbaa8909f185dc036247adbee70cf4452a3d"
   }
 }
