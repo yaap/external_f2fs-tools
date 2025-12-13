@@ -115,8 +115,7 @@ static int get_new_sb(struct f2fs_super_block *sb)
 			get_sb(segment_count_sit) +
 			get_sb(segment_count_nat))) * blks_per_seg;
 
-	blocks_for_ssa = round_up(total_valid_blks_available / blks_per_seg,
-			SUMS_PER_BLOCK);
+	blocks_for_ssa = total_valid_blks_available / blks_per_seg + 1;
 
 	set_sb(segment_count_ssa, SEG_ALIGN(blocks_for_ssa));
 
@@ -210,24 +209,23 @@ static void migrate_main(struct f2fs_sb_info *sbi, unsigned int offset)
 				START_BLOCK(sbi, 0) + offset);
 }
 
-static void move_ssa(struct f2fs_sb_info *sbi, struct f2fs_super_block *new_sb,
-		unsigned int old_segno, unsigned int new_segno)
+static void move_ssa(struct f2fs_sb_info *sbi, unsigned int segno,
+					block_t new_sum_blk_addr)
 {
 	struct f2fs_summary_block *sum_blk;
 	int type;
 
-	sum_blk = get_sum_block(sbi, old_segno, &type);
+	sum_blk = get_sum_block(sbi, segno, &type);
 	if (type < SEG_TYPE_MAX) {
 		int ret;
-		u64 new_blkaddr = GET_SUM_NEW_BLKADDR(new_sb, new_segno);
-		u32 new_blkoff = GET_SUM_NEW_BLKOFF(new_sb, new_segno);
 
-		ret = dev_write_4k_block(sum_blk, new_blkaddr, new_blkoff,
-				WRITE_LIFE_NONE);
+		ret = dev_write_block(sum_blk, new_sum_blk_addr,
+				      WRITE_LIFE_NONE);
 		ASSERT(ret >= 0);
 		DBG(1, "Write summary block: (%d) segno=%x/%x --> (%d) %x\n",
-			type, old_segno, GET_SUM_BLKADDR(sbi, old_segno),
-			IS_SUM_NODE_SEG(sum_blk), (unsigned int)new_blkaddr);
+				type, segno, GET_SUM_BLKADDR(sbi, segno),
+				IS_SUM_NODE_SEG(sum_blk),
+				new_sum_blk_addr);
 	}
 	if (type == SEG_TYPE_NODE || type == SEG_TYPE_DATA ||
 			type == SEG_TYPE_MAX) {
@@ -242,42 +240,36 @@ static void migrate_ssa(struct f2fs_sb_info *sbi,
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	block_t old_sum_blkaddr = get_sb(ssa_blkaddr);
 	block_t new_sum_blkaddr = get_newsb(ssa_blkaddr);
-	unsigned int expand_segno = MAIN_SEGS(sbi) - offset;
-	unsigned int new_seg_total = get_newsb(segment_count);
-	int new_segno;
+	block_t end_sum_blkaddr = get_newsb(main_blkaddr);
+	block_t expand_sum_blkaddr = new_sum_blkaddr +
+					MAIN_SEGS(sbi) - offset;
+	block_t blkaddr;
 	int ret;
-	void *zero_block = calloc(F2FS_SUM_BLKSIZE, 1);
+	void *zero_block = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(zero_block);
 
-	if (offset && new_sum_blkaddr <= (old_sum_blkaddr +
-				offset / SUMS_PER_BLOCK)) {
-		new_segno = 0;
-		while (new_segno < new_seg_total) {
-			if (new_segno < expand_segno) {
-				move_ssa(sbi, new_sb, offset++, new_segno);
+	if (offset && new_sum_blkaddr < old_sum_blkaddr + offset) {
+		blkaddr = new_sum_blkaddr;
+		while (blkaddr < end_sum_blkaddr) {
+			if (blkaddr < expand_sum_blkaddr) {
+				move_ssa(sbi, offset++, blkaddr++);
 			} else {
-				ret = dev_write_4k_block(zero_block,
-					GET_SUM_NEW_BLKADDR(new_sb, new_segno),
-					GET_SUM_NEW_BLKOFF(new_sb, new_segno),
-					WRITE_LIFE_NONE);
+				ret = dev_write_block(zero_block, blkaddr++,
+						      WRITE_LIFE_NONE);
 				ASSERT(ret >=0);
 			}
-			new_segno++;
 		}
 	} else {
-		new_segno = new_seg_total - 1;
+		blkaddr = end_sum_blkaddr - 1;
 		offset = MAIN_SEGS(sbi) - 1;
-		while (new_segno >= 0) {
-			if (new_segno >= expand_segno) {
-				ret = dev_write_4k_block(zero_block,
-					GET_SUM_NEW_BLKADDR(new_sb, new_segno),
-					GET_SUM_NEW_BLKOFF(new_sb, new_segno),
-					WRITE_LIFE_NONE);
+		while (blkaddr >= new_sum_blkaddr) {
+			if (blkaddr >= expand_sum_blkaddr) {
+				ret = dev_write_block(zero_block, blkaddr--,
+						      WRITE_LIFE_NONE);
 				ASSERT(ret >=0);
 			} else {
-				move_ssa(sbi, new_sb, offset--, new_segno);
+				move_ssa(sbi, offset--, blkaddr--);
 			}
-			new_segno--;
 		}
 	}
 
