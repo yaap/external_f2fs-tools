@@ -116,7 +116,7 @@ void sit_dump(struct f2fs_sb_info *sbi, unsigned int start_sit,
 	struct sit_info *sit_i = SIT_I(sbi);
 	unsigned int segno;
 	char buf[BUF_SZ];
-	u32 free_segs = 0;;
+	u32 free_segs = 0;
 	u64 valid_blocks = 0;
 	int ret;
 	int fd, i;
