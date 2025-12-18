@@ -1093,7 +1093,7 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, BW = %.Lf MB/s, "
 		"IO time = %"PRIu64" us, mlock time = %"PRIu64" us, print %u bytes:\n",
 		read_cnt, get_current_us() - io_time_start,
-		((long double)read_cnt / (get_current_us() - io_time_start)),
+		((long double)read_cnt / (io_time_end - io_time_start)),
 		io_time_end - io_time_start,
 		mlock_time_end - mlock_time_start,
 		print_bytes);

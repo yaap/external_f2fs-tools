@@ -500,12 +500,8 @@ static int f2fs_prepare_super_block(void)
 	if (c.feature & F2FS_FEATURE_RO) {
 		blocks_for_ssa = 0;
 	} else {
-		unsigned int ssa_per_block;
-
 		ASSERT((total_valid_blks_available % c.blks_per_seg) == 0);
-		ssa_per_block = c.blksize / F2FS_SUM_BLKSIZE;
-		blocks_for_ssa = round_up(total_valid_blks_available /
-				c.blks_per_seg,	ssa_per_block);
+		blocks_for_ssa = total_valid_blks_available / c.blks_per_seg;
 	}
 
 	set_sb(segment_count_ssa, SEG_ALIGN(blocks_for_ssa));
