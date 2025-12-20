@@ -938,7 +938,8 @@ static void do_write_advice(int argc, char **argv, const struct cmd_desc *cmd)
 "  dontcache: buffered IO + dontcache\n"		\
 "  dio      : direct IO\n"				\
 "  mmap     : mmap IO\n"				\
-"  mlock    : mmap + mlock\n"				\
+"  madvise  : mmap + mlock2 + madvise\n"		\
+"  fadvise  : mmap + fadvise + mlock\n"			\
 "advice can be\n"					\
 " 1 : set sequential|willneed\n"			\
 " 0 : none\n"						\
@@ -955,7 +956,8 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	u64 mlock_time_start = 0, mlock_time_end = 0;
 	int flags = 0;
 	int do_mmap = 0;
-	int do_mlock = 0;
+	int do_fadvise = 0;
+	int do_madvise = 0;
 	int do_dontcache = 0;
 	int fd, advice;
 
@@ -979,8 +981,10 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		flags |= O_DIRECT;
 	else if (!strcmp(argv[4], "mmap"))
 		do_mmap = 1;
-	else if (!strcmp(argv[4], "mlock"))
-		do_mlock = 1;
+	else if (!strcmp(argv[4], "madvise"))
+		do_madvise = 1;
+	else if (!strcmp(argv[4], "fadvise"))
+		do_fadvise = 1;
 	else if (!strcmp(argv[4], "dontcache"))
 #ifdef HAVE_PREADV2
 		do_dontcache = 1;
@@ -1009,8 +1013,8 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		printf("fadvise SEQUENTIAL|WILLNEED to a file: %s\n", argv[7]);
 	}
 
-	io_time_start = get_current_us();
 	if (do_mmap) {
+		io_time_start = get_current_us();
 		data = mmap(NULL, count * buf_size, PROT_READ,
 				MAP_SHARED | MAP_POPULATE, fd, offset);
 		if (data == MAP_FAILED)
@@ -1023,11 +1027,31 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		mlock_time_end = get_current_us();
 		read_cnt = count * buf_size;
 		memcpy(print_buf, data, print_bytes);
-	} else if (do_mlock) {
+	} else if (do_madvise) {
 		data = mmap(NULL, count * buf_size, PROT_READ,
 				MAP_SHARED, fd, offset);
 		if (data == MAP_FAILED)
 			die("Mmap failed");
+
+		mlock_time_start = get_current_us();
+		if (mlock2(data, count * buf_size, MLOCK_ONFAULT))
+			die_errno("mlock2 failed");
+		mlock_time_end = get_current_us();
+
+		io_time_start = get_current_us();
+		if (madvise(data, count * buf_size, MADV_POPULATE_READ) != 0)
+			die_errno("madvise failed");
+		io_time_end = get_current_us();
+
+		read_cnt = count * buf_size;
+		memcpy(print_buf, data, print_bytes);
+	} else if (do_fadvise) {
+		data = mmap(NULL, count * buf_size, PROT_READ,
+				MAP_SHARED, fd, offset);
+		if (data == MAP_FAILED)
+			die("Mmap failed");
+
+		io_time_start = get_current_us();
 		if (posix_fadvise(fd, offset, count * buf_size,
 					POSIX_FADV_WILLNEED) != 0)
 			die_errno("fadvise failed");
@@ -1040,6 +1064,7 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		read_cnt = count * buf_size;
 		memcpy(print_buf, data, print_bytes);
 	} else {
+		io_time_start = get_current_us();
 		for (i = 0; i < count; i++) {
 			if (!do_dontcache) {
 				ret = pread(fd, buf, buf_size, offset + buf_size * i);
@@ -1065,10 +1090,13 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 		}
 		io_time_end = get_current_us();
 	}
-	printf("Read %"PRIu64" bytes IO time = %"PRIu64" us mlock time = %"PRIu64" us, BW = %.Lf MB/s print %u bytes:\n",
-		read_cnt, io_time_end - io_time_start,
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, BW = %.Lf MB/s, "
+		"IO time = %"PRIu64" us, mlock time = %"PRIu64" us, print %u bytes:\n",
+		read_cnt, get_current_us() - io_time_start,
+		((long double)read_cnt / (io_time_end - io_time_start)),
+		io_time_end - io_time_start,
 		mlock_time_end - mlock_time_start,
-		((long double)read_cnt / (io_time_end - io_time_start)), print_bytes);
+		print_bytes);
 	printf("%08"PRIx64" : ", offset);
 	for (i = 1; i <= print_bytes; i++) {
 		printf("%02x", print_buf[i - 1]);
@@ -1079,7 +1107,7 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 	if (do_mmap) {
 		munmap(data, count * buf_size);
-	} else if (do_mlock) {
+	} else if (do_fadvise || do_madvise) {
 		munlock(data, count * buf_size);
 		munmap(data, count * buf_size);
 	}
@@ -1225,6 +1253,7 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	int fd, advice;
 	time_t t;
 	struct stat stbuf;
+	u64 size;
 
 	if (argc != 6) {
 		fputs("Excess arguments\n\n", stderr);
@@ -1261,7 +1290,17 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	if (fstat(fd, &stbuf) != 0)
 		die_errno("fstat of source file failed");
 
-	aligned_size = (u64)stbuf.st_size & ~((u64)(F2FS_DEFAULT_BLKSIZE - 1));
+	if (S_ISBLK(stbuf.st_mode)) {
+		u64 devsize;
+
+		if (ioctl(fd, BLKGETSIZE64, &devsize) < 0)
+			die_errno("BLKGETSIZE64 failed");
+		size = devsize;
+	} else {
+		size = (u64)stbuf.st_size;
+	}
+
+	aligned_size = (u64)size & ~((u64)(F2FS_DEFAULT_BLKSIZE - 1));
 	if (aligned_size < buf_size)
 		die("File is too small to random read");
 	end_idx = (u64)(aligned_size - buf_size) / (u64)F2FS_DEFAULT_BLKSIZE + 1;
@@ -2454,6 +2493,52 @@ static void do_test_lookup_perf(int argc, char **argv, const struct cmd_desc *cm
 	exit(0);
 }
 
+#define freeze_desc "freeze filesystem"
+#define freeze_help "f2fs_io freeze [directory_path]\n\n"
+
+static void do_freeze(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_DIRECTORY, 0);
+
+	ret = ioctl(fd, FIFREEZE);
+	if (ret < 0)
+		die_errno("FIFREEZE failed");
+
+	printf("freeze filesystem ret=%d\n", ret);
+	exit(0);
+}
+
+#define thaw_desc "thaw filesystem"
+#define thaw_help "f2fs_io thaw [directory_path]\n\n"
+
+static void do_thaw(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int ret, fd;
+
+	if (argc != 2) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[1], O_DIRECTORY, 0);
+
+	ret = ioctl(fd, FITHAW);
+	if (ret < 0)
+		die_errno("FITHAW failed");
+
+	printf("thaw filesystem ret=%d\n", ret);
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -2504,6 +2589,8 @@ const struct cmd_desc cmd_list[] = {
 	CMD(ftruncate),
 	CMD(test_create_perf),
 	CMD(test_lookup_perf),
+	CMD(freeze),
+	CMD(thaw),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 

@@ -400,7 +400,7 @@ int dev_read_version(void *buf, __u64 offset, size_t len)
 {
 	if (c.sparse_mode)
 		return 0;
-#ifdef HAVE_RPEAD
+#ifdef HAVE_PREAD
 	if (pread(c.kd, buf, len, (off_t)offset) < 0)
 		return -1;
 #else

@@ -208,7 +208,7 @@ static void cure_extension_list(void)
 		if (i == 0)
 			set_sb(extension_count, pos);
 		else
-			sb->hot_ext_count = pos - get_sb(extension_count);;
+			sb->hot_ext_count = pos - get_sb(extension_count);
 
 		if (!ext_str)
 			continue;

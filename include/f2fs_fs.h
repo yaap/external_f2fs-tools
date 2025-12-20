@@ -2021,6 +2021,7 @@ struct feature feature_table[] = {					\
 	{ "casefold",			F2FS_FEATURE_CASEFOLD,		1}, \
 	{ "compression",		F2FS_FEATURE_COMPRESSION,	1}, \
 	{ "ro",				F2FS_FEATURE_RO,		1}, \
+	{ "device_alias",		F2FS_FEATURE_DEVICE_ALIAS,	0}, \
 	{ NULL,				0x0,				0}, \
 };
 
