@@ -10,14 +10,14 @@ third_party {
     tag: "NVD-CPE2.3:cpe:/a:f2fs-tools_project:f2fs-tools:1.16.0"
   }
   last_upgrade_date {
-    year: 2025
-    month: 12
-    day: 17
+    year: 2026
+    month: 1
+    day: 3
   }
   homepage: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git/"
   identifier {
     type: "Git"
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git"
-    version: "6e42cbe6f49893217b7ce5eb5f7b076683e32996"
+    version: "3ab67256d83a8323b92992155b99c3365c0964f6"
   }
 }
