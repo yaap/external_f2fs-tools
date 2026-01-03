@@ -380,6 +380,12 @@ static void f2fs_parse_options(int argc, char *argv[])
 		}
 	}
 
+	if ((c.feature & F2FS_FEATURE_PACKED_SSA) &&
+			(c.blksize == F2FS_MIN_BLKSIZE)) {
+		c.feature &= ~F2FS_FEATURE_PACKED_SSA;
+		MSG(0, "\tInfo: packed_ssa feature is disabled for 4k block.\n");
+	}
+
 	if (optind >= argc) {
 		MSG(0, "\tError: Device not specified\n");
 		mkfs_usage();

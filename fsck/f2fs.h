@@ -447,11 +447,36 @@ static inline block_t __end_block_addr(struct f2fs_sb_info *sbi)
 	(SM_I(sbi) ? SM_I(sbi)->seg0_blkaddr :				\
 		le32_to_cpu(F2FS_RAW_SUPER(sbi)->segment0_blkaddr))
 
+#define SUMS_PER_BLOCK (F2FS_BLKSIZE / F2FS_SUM_BLKSIZE)
 #define GET_SUM_BLKADDR(sbi, segno)					\
-	((sbi->sm_info->ssa_blkaddr) + segno)
+	(c.feature & F2FS_FEATURE_PACKED_SSA ? \
+	((SM_I(sbi)->ssa_blkaddr) + (segno) / SUMS_PER_BLOCK) : \
+	((SM_I(sbi)->ssa_blkaddr) + (segno)))
+#define GET_SUM_BLKOFF(segno)					\
+	(c.feature & F2FS_FEATURE_PACKED_SSA ? \
+	((segno) % SUMS_PER_BLOCK) : 0)
 
 #define GET_SEGOFF_FROM_SEG0(sbi, blk_addr)				\
 	((blk_addr) - SM_I(sbi)->seg0_blkaddr)
+
+static inline int write_sum_block(struct f2fs_sb_info *sbi,
+		void *buf, unsigned int segno, enum rw_hint whint)
+{
+	if (c.feature & F2FS_FEATURE_PACKED_SSA)
+		return dev_write_4k_block(buf, GET_SUM_BLKADDR(sbi, segno),
+				GET_SUM_BLKOFF(segno), whint);
+	return dev_write_block(buf, GET_SUM_BLKADDR(sbi, segno), whint);
+}
+
+static inline int read_sum_block(struct f2fs_sb_info *sbi,
+		void *buf, unsigned int segno)
+{
+	if (c.feature & F2FS_FEATURE_PACKED_SSA)
+		return dev_read_4k_block(buf, GET_SUM_BLKADDR(sbi, segno),
+				GET_SUM_BLKOFF(segno));
+	return dev_read_block(buf, GET_SUM_BLKADDR(sbi, segno));
+}
+
 
 #define GET_SEGNO_FROM_SEG0(sbi, blk_addr)				\
 	(GET_SEGOFF_FROM_SEG0(sbi, blk_addr) >> sbi->log_blocks_per_seg)
