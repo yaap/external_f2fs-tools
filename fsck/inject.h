@@ -30,6 +30,7 @@ struct inject_option {
 	int cp;			/* which cp */
 	int nat;		/* which nat pack */
 	int sit;		/* which sit pack */
+	int dots;		/* . or .. dentry */
 	bool ssa;
 	bool node;
 	bool dent;

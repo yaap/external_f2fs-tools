@@ -70,10 +70,10 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 			ASSERT(ret >= 0);
 			if (ni.blk_addr != 0x0) {
 				len = snprintf(buf, BUF_SZ,
-					"nid:%5u\tino:%5u\toffset:%5u"
+					"nid:%5u\tino:%5u\tver:%3d\toffset:%5u"
 					"\tblkaddr:%10u\tpack:%d"
 					"\tcp_ver:0x%" PRIx64 "\n",
-					ni.nid, ni.ino,
+					ni.nid, ni.ino, ni.version,
 					le32_to_cpu(footer->flag) >> OFFSET_BIT_SHIFT,
 					ni.blk_addr, pack,
 					le64_to_cpu(footer->cp_ver));
@@ -91,10 +91,10 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 			ret = dev_read_block(node_block, ni.blk_addr);
 			ASSERT(ret >= 0);
 			len = snprintf(buf, BUF_SZ,
-				"nid:%5u\tino:%5u\toffset:%5u"
+				"nid:%5u\tino:%5u\tver:%3d\toffset:%5u"
 				"\tblkaddr:%10u\tpack:%d"
 				"\tcp_ver:0x%" PRIx64 "\n",
-				ni.nid, ni.ino,
+				ni.nid, ni.ino, ni.version,
 				le32_to_cpu(footer->flag) >> OFFSET_BIT_SHIFT,
 				ni.blk_addr, pack,
 				le64_to_cpu(footer->cp_ver));
@@ -116,7 +116,7 @@ void sit_dump(struct f2fs_sb_info *sbi, unsigned int start_sit,
 	struct sit_info *sit_i = SIT_I(sbi);
 	unsigned int segno;
 	char buf[BUF_SZ];
-	u32 free_segs = 0;;
+	u32 free_segs = 0;
 	u64 valid_blocks = 0;
 	int ret;
 	int fd, i;
@@ -135,8 +135,10 @@ void sit_dump(struct f2fs_sb_info *sbi, unsigned int start_sit,
 		offset = SIT_BLOCK_OFFSET(sit_i, segno);
 		memset(buf, 0, BUF_SZ);
 		snprintf(buf, BUF_SZ,
-		"\nsegno:%8u\tvblocks:%3u\tseg_type:%d\tsit_pack:%d\n\n",
+		"\nsegno:%8u\tvblocks:%3u\tseg_type:%d\tmtime:%llu\t"
+		"sit_pack:%d\n\n",
 			segno, se->valid_blocks, se->type,
+			(unsigned long long)se->mtime,
 			f2fs_test_bit(offset, sit_i->sit_bitmap) ? 2 : 1);
 
 		ret = write(fd, buf, strlen(buf));
@@ -680,6 +682,9 @@ static int dump_filesystem(struct f2fs_sb_info *sbi, struct node_info *ni,
 	/* dump file's data */
 	if (c.show_file_map)
 		return dump_inode_blk(sbi, ni->ino, node_blk);
+
+	if (c.answer_no)
+		return 0;
 
 	printf("Do you want to dump this %s into %s/? [Y/N] ",
 			S_ISDIR(imode) ? "folder" : "file",

@@ -208,7 +208,7 @@ static void cure_extension_list(void)
 		if (i == 0)
 			set_sb(extension_count, pos);
 		else
-			sb->hot_ext_count = pos - get_sb(extension_count);;
+			sb->hot_ext_count = pos - get_sb(extension_count);
 
 		if (!ext_str)
 			continue;
@@ -497,11 +497,20 @@ static int f2fs_prepare_super_block(void)
 			get_sb(segment_count_nat))) *
 			c.blks_per_seg;
 
-	if (c.feature & F2FS_FEATURE_RO)
+	if (c.feature & F2FS_FEATURE_RO) {
 		blocks_for_ssa = 0;
-	else
-		blocks_for_ssa = total_valid_blks_available /
-				c.blks_per_seg + 1;
+	} else {
+		unsigned int ssa_per_block;
+
+		ASSERT((total_valid_blks_available % c.blks_per_seg) == 0);
+		if (c.feature & F2FS_FEATURE_PACKED_SSA) {
+			ssa_per_block = c.blksize / F2FS_SUM_BLKSIZE;
+			blocks_for_ssa = round_up(total_valid_blks_available /
+					c.blks_per_seg, ssa_per_block);
+		} else {
+			blocks_for_ssa = total_valid_blks_available / c.blks_per_seg;
+		}
+	}
 
 	set_sb(segment_count_ssa, SEG_ALIGN(blocks_for_ssa));
 

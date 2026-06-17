@@ -9,6 +9,7 @@ Before compilation
 
 You should install the following packages.
  - libuuid-devel or uuid-dev
+ - make
  - autoconf
  - libtool
  - libselinux1-dev
@@ -24,7 +25,7 @@ How to compile
 --------------
 
  # ./configure
- # make
+ # make -j$(( $(nproc) + 1))
  # make install
 
 How to cross-compile (e.g., for ARM)
@@ -39,7 +40,7 @@ How to cross-compile (e.g., for ARM)
  3. then, do:
  # LDFLAGS=--static ./configure \
 	--host=arm-none-linux-gnueabi --target=arm-none-linux-gnueabi
- # make
+ # make -j$(( $(nproc) + 1))
 
 How to run by default
 ---------------------

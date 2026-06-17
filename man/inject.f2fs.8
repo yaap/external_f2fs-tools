@@ -45,13 +45,16 @@ The available \fImb\fP of \fIsb\fP are:
 .RS 1.2i
 .TP
 .BI magic
-magic numbe.
+magic number.
 .TP
 .BI s_stop_reason
 s_stop_reason array.
 .TP
 .BI s_errors
 s_errors array.
+.TP
+.BI feature
+features.
 .TP
 .BI devs.path
 path in devs array.
@@ -79,6 +82,18 @@ cur_data_segno array.
 .TP
 .BI cur_data_blkoff
 cur_data_blkoff array.
+.TP
+.BI next_blkaddr
+fsync dnodes.
+.TP
+.BI alloc_type
+alloc_type array.
+.TP
+.BI crc
+crc checksum.
+.TP
+.BI elapsed_time
+elapsed mount time.
 .RE
 .TP
 .BI \-\-nat " 0 or 1 or 2"
@@ -133,7 +148,7 @@ summary entry ofs_in_node.
 .RE
 .TP
 .BI \-\-node
-Inject node block specified by \fInid\P.
+Inject node block specified by \fInid\fP.
 The available \fImb\fP of \fInode\fP are:
 .RS 1.2i
 .TP
@@ -170,11 +185,29 @@ inode i_size.
 .BI i_blocks
 inode i_blocks.
 .TP
+.BI i_xattr_nid
+inode i_xattr_nid.
+.TP
+.BI i_ext.fofs
+inode i_ext.fofs.
+.TP
+.BI i_ext.blk_addr
+inode i_ext.blk_addr.
+.TP
+.BI i_ext.len
+inode i_ext.len.
+.TP
 .BI i_extra_isize
 inode i_extra_isize.
 .TP
+.BI i_inline_xattr_size
+inode i_inline_xattr_size.
+.TP
 .BI i_inode_checksum
 inode i_inode_checksum.
+.TP
+.BI i_compr_blocks
+inode i_compr_blocks.
 .TP
 .BI i_addr
 inode i_addr array specified by \fIidx\fP.
@@ -187,7 +220,14 @@ inode i_nid array specified by \fIidx\fP.
 .RE
 .TP
 .BI \-\-dent
-Inject dentry block or dir entry specified \fInid\fP.
+Inject dentry block or dir entry specified by \fInid\fP.
+.RS 1.2i
+.TP
+.BI \-\-dots " 1 or 2"
+The option means the "." or ".." directory entry of \fInid\fP is going to be injected.
+.RE
+.TP
+.BI ""
 The available \fImb\fP of \fIdent\fP are:
 .RS 1.2i
 .TP
@@ -202,6 +242,9 @@ dentry ino.
 .TP
 .BI d_ftype
 dentry ftype.
+.TP
+.BI filename
+dentry filename, and corresponding d_hash and namelen are updated implicitly.
 .RE
 .TP
 .BI \-\-dry\-run

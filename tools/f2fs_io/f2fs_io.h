@@ -226,6 +226,10 @@ enum {
 #define FS_CASEFOLD_FL			0x40000000 /* Folder is case insensitive */
 #endif
 
+#ifndef RWF_DONTCACHE
+#define RWF_DONTCACHE			0x00000080 /* Uncached buffered IO.  */
+#endif
+
 struct f2fs_gc_range {
 	u32 sync;
 	u64 start;

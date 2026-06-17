@@ -400,7 +400,7 @@ int dev_read_version(void *buf, __u64 offset, size_t len)
 {
 	if (c.sparse_mode)
 		return 0;
-#ifdef HAVE_RPEAD
+#ifdef HAVE_PREAD
 	if (pread(c.kd, buf, len, (off_t)offset) < 0)
 		return -1;
 #else
@@ -732,6 +732,18 @@ int dev_read_block(void *buf, __u64 blk_addr)
 int dev_reada_block(__u64 blk_addr)
 {
 	return dev_readahead(blk_addr << F2FS_BLKSIZE_BITS, F2FS_BLKSIZE);
+}
+
+int dev_write_4k_block(void *buf, __u64 blk_addr, __u32 offset, enum rw_hint whint)
+{
+	return dev_write(buf, (blk_addr << F2FS_BLKSIZE_BITS) +
+			offset * F2FS_MIN_BLKSIZE, F2FS_MIN_BLKSIZE, whint);
+}
+
+int dev_read_4k_block(void *buf, __u64 blk_addr, __u32 offset)
+{
+	return dev_read(buf, (blk_addr << F2FS_BLKSIZE_BITS) +
+			offset * F2FS_MIN_BLKSIZE, F2FS_MIN_BLKSIZE);
 }
 
 int f2fs_fsync_device(void)
